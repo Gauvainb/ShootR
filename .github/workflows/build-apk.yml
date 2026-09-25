@@ -2,15 +2,18 @@ name: Build Debug APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   workflow_dispatch:
 
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      ANDROID_HOME: /opt/android-sdk
 
     steps:
       - name: Checkout repository
@@ -19,52 +22,54 @@ jobs:
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: 'gradle'
+          java-version: "21"
+          distribution: "temurin"
+          cache: "gradle"
 
-      - name: Set up Android SDK & Licenses
-        uses: android-actions/setup-android@v3
+      - name: Install Android SDK command line tools
+        shell: bash
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdline-tools.zip
+            unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
+
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Configurer l'environnement de build
+      - name: Configure build environment
+        shell: bash
         run: |
-          # 1. Accepter toutes les licences Android SDK
-          yes | sdkmanager --licenses || true
-
-          # 2. Installer la plateforme SDK 36 si nécessaire
-          sdkmanager "platforms;android-36" || true
-
-          # 3. Créer les fichiers de configuration secrets minimaux si absents
           if [ ! -f ".env" ]; then touch .env; fi
           if [ ! -f ".env.example" ]; then touch .env.example; fi
 
-          # 4. Gérer le keystore de debug (restauration ou génération automatique)
           if [ ! -f "debug.keystore" ]; then
             if [ -f "debug.keystore.base64" ]; then
-              echo "Restauration de debug.keystore via base64..."
+              echo "Restoring debug.keystore..."
               base64 -d debug.keystore.base64 > debug.keystore
             else
-              echo "Génération d'un debug.keystore..."
-              keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+              echo "Generating debug.keystore..."
+              keytool -genkey -v -keystore debug.keystore \
+                -storepass android -alias androiddebugkey -keypass android \
+                -keyalg RSA -keysize 2048 -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
             fi
           fi
 
-          # 5. S'assurer que gradlew existe et est exécutable
           if [ ! -f "./gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Génération de gradlew..."
+            echo "Generating gradlew..."
             gradle wrapper
           fi
           chmod +x ./gradlew
 
-      - name: Compiler l'APK avec Gradle
+      - name: Build APK
         run: ./gradlew assembleDebug --stacktrace --no-daemon --no-configuration-cache
-
-      - name: Mettre à disposition l'APK en téléchargement
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
