@@ -25,16 +25,17 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Ensure Gradle Wrapper and gradlew
-        run: |
-          if [ ! -f "gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Generating Gradle wrapper files..."
-            gradle wrapper
-          fi
-          chmod +x gradlew
-
       - name: Build with Gradle
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            echo "gradlew non trouvé dans le dépôt, génération automatique du wrapper..."
+            gradle wrapper
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          fi
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
