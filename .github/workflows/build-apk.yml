@@ -16,30 +16,43 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21 (Requis pour AGP 9+ et Gradle 9+)
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: 'gradle'
 
+      - name: Set up Android SDK & Licenses
+        uses: android-actions/setup-android@v3
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Restaurer debug.keystore et configurer l'environnement
+      - name: Configurer l'environnement de build
         run: |
-          # 1. Restaurer debug.keystore à partir du fichier base64
-          if [ -f "debug.keystore.base64" ]; then
-            echo "Restauration de debug.keystore..."
-            base64 -d debug.keystore.base64 > debug.keystore
+          # 1. Accepter toutes les licences Android SDK
+          yes | sdkmanager --licenses || true
+
+          # 2. Installer la plateforme SDK 36 si nécessaire
+          sdkmanager "platforms;android-36" || true
+
+          # 3. Créer les fichiers de configuration secrets minimaux si absents
+          if [ ! -f ".env" ]; then touch .env; fi
+          if [ ! -f ".env.example" ]; then touch .env.example; fi
+
+          # 4. Gérer le keystore de debug (restauration ou génération automatique)
+          if [ ! -f "debug.keystore" ]; then
+            if [ -f "debug.keystore.base64" ]; then
+              echo "Restauration de debug.keystore via base64..."
+              base64 -d debug.keystore.base64 > debug.keystore
+            else
+              echo "Génération d'un debug.keystore..."
+              keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            fi
           fi
 
-          # 2. Créer .env vide si absent pour le plugin secrets
-          if [ ! -f ".env" ]; then
-            touch .env
-          fi
-
-          # 3. S'assurer que le script gradlew existe et est exécutable
+          # 5. S'assurer que gradlew existe et est exécutable
           if [ ! -f "./gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
             echo "Génération de gradlew..."
             gradle wrapper
@@ -47,7 +60,7 @@ jobs:
           chmod +x ./gradlew
 
       - name: Compiler l'APK avec Gradle
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        run: ./gradlew assembleDebug --stacktrace --no-daemon --no-configuration-cache
 
       - name: Mettre à disposition l'APK en téléchargement
         uses: actions/upload-artifact@v4
