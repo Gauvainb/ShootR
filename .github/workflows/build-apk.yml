@@ -21,10 +21,17 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure Gradle Wrapper and gradlew
+        run: |
+          if [ ! -f "gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Generating Gradle wrapper files..."
+            gradle wrapper
+          fi
+          chmod +x gradlew
 
       - name: Build with Gradle
         run: ./gradlew assembleDebug --stacktrace
