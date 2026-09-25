@@ -2,18 +2,15 @@ name: Build Debug APK
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: [ "main", "master" ]
   pull_request:
-    branches: ["main", "master"]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
-    env:
-      ANDROID_SDK_ROOT: /opt/android-sdk
-      ANDROID_HOME: /opt/android-sdk
 
     steps:
       - name: Checkout repository
@@ -22,54 +19,41 @@ jobs:
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: "21"
-          distribution: "temurin"
-          cache: "gradle"
-
-      - name: Install Android SDK command line tools
-        shell: bash
-        run: |
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdline-tools.zip
-            unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
-            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          fi
-
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Configure build environment
-        shell: bash
+      - name: Prepare build environment
         run: |
+          # 1. Automatically accept Android SDK licenses
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+          # 2. Ensure minimal .env exists so secrets plugin does not complain
           if [ ! -f ".env" ]; then touch .env; fi
           if [ ! -f ".env.example" ]; then touch .env.example; fi
 
+          # 3. Ensure debug.keystore exists
           if [ ! -f "debug.keystore" ]; then
             if [ -f "debug.keystore.base64" ]; then
-              echo "Restoring debug.keystore..."
               base64 -d debug.keystore.base64 > debug.keystore
-            else
-              echo "Generating debug.keystore..."
-              keytool -genkey -v -keystore debug.keystore \
-                -storepass android -alias androiddebugkey -keypass android \
-                -keyalg RSA -keysize 2048 -validity 10000 \
-                -dname "CN=Android Debug,O=Android,C=US"
             fi
           fi
 
+          # 4. Ensure gradlew is executable
           if [ ! -f "./gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Generating gradlew..."
             gradle wrapper
           fi
           chmod +x ./gradlew
 
-      - name: Build APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon --no-configuration-cache
+      - name: Build APK with Gradle
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
