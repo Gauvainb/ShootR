@@ -2,5 +2,7 @@
   "name": "Tir Tracker",
   "description": "Application native pour tireurs sportifs : carnet de tir, impacteur de cible interactif, suivi des armes, munitions et statistiques de groupement.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

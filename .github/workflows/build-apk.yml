@@ -16,28 +16,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21 (Requis pour AGP 9+ et Gradle 9+)
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
+          cache: 'gradle'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build with Gradle
+      - name: Restaurer debug.keystore et configurer l'environnement
         run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace
-          else
-            echo "gradlew non trouvé dans le dépôt, génération automatique du wrapper..."
-            gradle wrapper
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace
+          # 1. Restaurer debug.keystore à partir du fichier base64
+          if [ -f "debug.keystore.base64" ]; then
+            echo "Restauration de debug.keystore..."
+            base64 -d debug.keystore.base64 > debug.keystore
           fi
 
-      - name: Upload Debug APK
+          # 2. Créer .env vide si absent pour le plugin secrets
+          if [ ! -f ".env" ]; then
+            touch .env
+          fi
+
+          # 3. S'assurer que le script gradlew existe et est exécutable
+          if [ ! -f "./gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Génération de gradlew..."
+            gradle wrapper
+          fi
+          chmod +x ./gradlew
+
+      - name: Compiler l'APK avec Gradle
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Mettre à disposition l'APK en téléchargement
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
