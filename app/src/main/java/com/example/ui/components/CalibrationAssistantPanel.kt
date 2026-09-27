@@ -243,7 +243,7 @@ fun CalibrationAssistantPanel(
                     when (currentStep) {
                         CalibrationStep.SET_CENTER -> {
                             Text(
-                                text = "🎯 Touchez le centre de la cible pour positionner la croix verte.",
+                                text = "🎯 Touchez ou maintenez le doigt appuyé pour positionner précisément la croix verte au centre. (Défilement photo à 2 doigts)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold
@@ -251,7 +251,7 @@ fun CalibrationAssistantPanel(
                         }
                         CalibrationStep.CLICK_EDGE -> {
                             Text(
-                                text = "📏 Touchez un bord du visuel noir (${selectedReference.diameterMm.toInt()} mm). L'échelle se calcule instantanément.",
+                                text = "📏 Touchez ou glissez le doigt pour ajuster le diamètre du visuel (${selectedReference.diameterMm.toInt()} mm). Défilement photo à 2 doigts.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFFFBBF24),
                                 fontWeight = FontWeight.SemiBold
@@ -271,7 +271,7 @@ fun CalibrationAssistantPanel(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "Re-touchez le bord pour ajuster ou validez.",
+                                        text = "Glissez le doigt sur l'anneau pour réajuster ou validez.",
                                         fontSize = 10.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

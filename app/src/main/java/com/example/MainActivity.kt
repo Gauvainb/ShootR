@@ -13,10 +13,14 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -338,6 +342,13 @@ fun TirTrackerApp() {
     var activeMode by remember { mutableStateOf(AnnotationMode.IMPACT) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    var canvasWidthPx by remember { mutableFloatStateOf(1000f) }
+    var canvasHeightPx by remember { mutableFloatStateOf(1000f) }
+    var isUserDragging by remember { mutableStateOf(false) }
+    var dragHudText by remember { mutableStateOf("") }
+    var pendingImpactOffset by remember { mutableStateOf<Offset?>(null) }
+    var pendingImpactScore by remember { mutableStateOf<Pair<Int, Boolean>?>(null) }
+    var draggedImpactIndexState by remember { mutableStateOf<Int?>(null) }
 
     var selectedCalibrationRef by remember {
         mutableStateOf(TargetCalibrationDefaults.references[0])
@@ -562,7 +573,7 @@ fun TirTrackerApp() {
             impactsList.clear()
             val imps = sessionObj.optJSONArray("impacts")
             val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4.0f
-            val center = targetCenterPx ?: Offset(500f, 500f)
+            val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
 
             if (imps != null) {
                 for (i in 0 until imps.length()) {
@@ -731,12 +742,15 @@ fun TirTrackerApp() {
 
                         // Automatically center the reticle on the detected center
                         val normCenter = result.detectedCenterNormalized
-                        targetCenterPx = Offset(500f * (normCenter.x / 0.5f), 500f * (normCenter.y / 0.5f))
+                        targetCenterPx = Offset(canvasWidthPx * normCenter.x, canvasHeightPx * normCenter.y)
 
                         // Estimate pixelPerMm based on detected visual diameter
-                        if (result.detectedBlackRadiusNormalized > 0.05f && result.visualDiameterMm > 0f) {
-                            val estimatedVisualPixels = (result.detectedBlackRadiusNormalized * 2f) * 1000f
+                        if (result.detectedBlackRadiusNormalized > 0.02f && result.visualDiameterMm > 0f) {
+                            val estimatedVisualPixels = (result.detectedBlackRadiusNormalized * 2f) * canvasWidthPx
                             pixelPerMm = estimatedVisualPixels / result.visualDiameterMm
+                            val rPx = estimatedVisualPixels / 2f
+                            calibrationEdgePx = Offset(targetCenterPx!!.x + rPx, targetCenterPx!!.y)
+                            calibrationStep = CalibrationStep.CALIBRATED
                         }
 
                         showTargetDetectionDialog = false
@@ -1405,7 +1419,7 @@ fun TirTrackerApp() {
                     }
 
                     // 4. CANEVAS AVEC PHOTO ET OVERLAYS
-                    Box(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f)
@@ -1414,135 +1428,293 @@ fun TirTrackerApp() {
                             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
                             .clipToBounds()
                             .pointerInput(Unit) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    scale = (scale * zoom).coerceIn(0.5f, 6.0f)
-                                    offset += pan
-                                }
-                            }
-                            .pointerInput(activeMode, pixelPerMm, targetCenterPx, targetTypeInput, calibrationStep, selectedCalibrationRef) {
-                                detectTapGestures { tapPos ->
-                                    val unscaledX = (tapPos.x - offset.x) / scale
-                                    val unscaledY = (tapPos.y - offset.y) / scale
-                                    val point = Offset(unscaledX, unscaledY)
+                                awaitEachGesture {
+                                    val firstDown = awaitFirstDown(requireUnconsumed = false)
+                                    val firstDownPos = firstDown.position
+                                    var isMultiTouch = false
+                                    var prevCentroid = Offset.Zero
+                                    var prevDistance = 0f
 
-                                    when (activeMode) {
-                                        AnnotationMode.CALIBRATE -> {
-                                            if (calibrationStep == CalibrationStep.SET_CENTER) {
-                                                targetCenterPx = point
-                                                calibrationStep = CalibrationStep.CLICK_EDGE
-                                                if (calibrationEdgePx != null) {
-                                                    val rPx = hypot(calibrationEdgePx!!.x - point.x, calibrationEdgePx!!.y - point.y)
-                                                    if (rPx > 5f && selectedCalibrationRef.radiusMm > 0f) {
-                                                        pixelPerMm = rPx / selectedCalibrationRef.radiusMm
-                                                        calibrationStep = CalibrationStep.CALIBRATED
+                                    var activeDragTarget: String? = null // "CENTER", "DIAMETER", "IMPACT"
+                                    var draggedImpactIndex: Int? = null
+                                    var dragMoved = false
+                                    var lastScreenPos = firstDownPos
+
+                                    // Local touch coordinates
+                                    val currentCenter = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+                                    val initialLocalX = (firstDownPos.x - offset.x) / scale
+                                    val initialLocalY = (firstDownPos.y - offset.y) / scale
+                                    val initialLocalPoint = Offset(initialLocalX, initialLocalY)
+
+                                    val visualRadiusPx = if (pixelPerMm > 0f) selectedCalibrationRef.radiusMm * pixelPerMm else (canvasWidthPx * 0.25f)
+                                    val distToCenter = hypot(initialLocalPoint.x - currentCenter.x, initialLocalPoint.y - currentCenter.y)
+                                    val distToRing = kotlin.math.abs(distToCenter - visualRadiusPx)
+
+                                    // Check if down on an existing impact
+                                    val hitRadiusImpact = 35f / scale
+                                    val tappedImpactIdx = impactsList.indexOfFirst { imp ->
+                                        hypot(imp.canvasOffset.x - initialLocalPoint.x, imp.canvasOffset.y - initialLocalPoint.y) <= hitRadiusImpact
+                                    }
+
+                                    if (activeMode == AnnotationMode.CALIBRATE) {
+                                        activeDragTarget = when {
+                                            calibrationStep == CalibrationStep.SET_CENTER -> "CENTER"
+                                            calibrationStep == CalibrationStep.CLICK_EDGE -> "DIAMETER"
+                                            distToCenter < 45f / scale -> "CENTER"
+                                            distToRing < 45f / scale -> "DIAMETER"
+                                            else -> "DIAMETER"
+                                        }
+                                    } else if (activeMode == AnnotationMode.TARGET_CENTER) {
+                                        activeDragTarget = "CENTER"
+                                    } else if (activeMode == AnnotationMode.IMPACT) {
+                                        if (tappedImpactIdx >= 0) {
+                                            draggedImpactIndex = tappedImpactIdx
+                                            draggedImpactIndexState = tappedImpactIdx
+                                            activeDragTarget = "EXISTING_IMPACT"
+                                        } else {
+                                            activeDragTarget = "NEW_IMPACT"
+                                            val center = currentCenter
+                                            val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
+                                            val xMm = (initialLocalPoint.x - center.x) / pxMm
+                                            val yMm = (center.y - initialLocalPoint.y) / pxMm
+                                            val realImp = Impact(xMm, yMm)
+                                            val scorePair = computeScoreForImpact(realImp, targetTypeInput)
+                                            pendingImpactOffset = initialLocalPoint
+                                            pendingImpactScore = scorePair
+                                        }
+                                    }
+
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val pressedPointers = event.changes.filter { it.pressed }
+
+                                        if (pressedPointers.size >= 2) {
+                                            // MULTI-TOUCH : UNICITÉ DU DÉFILEMENT ET DU ZOOM À 2 DOIGTS
+                                            isMultiTouch = true
+                                            isUserDragging = false
+                                            dragHudText = ""
+                                            pendingImpactOffset = null
+                                            pendingImpactScore = null
+                                            draggedImpactIndexState = null
+
+                                            val p1 = pressedPointers[0].position
+                                            val p2 = pressedPointers[1].position
+                                            val currentCentroid = (p1 + p2) / 2f
+                                            val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
+
+                                            if (prevDistance > 0f) {
+                                                val zoomChange = currentDistance / prevDistance
+                                                val newScale = (scale * zoomChange).coerceIn(0.8f, 10f)
+                                                val pan = currentCentroid - prevCentroid
+
+                                                // Zoom centré avec précision absolue sur le centroïde des 2 doigts
+                                                val localCentroidX = (currentCentroid.x - offset.x) / scale
+                                                val localCentroidY = (currentCentroid.y - offset.y) / scale
+                                                val newOffsetX = currentCentroid.x - localCentroidX * newScale + pan.x
+                                                val newOffsetY = currentCentroid.y - localCentroidY * newScale + pan.y
+
+                                                scale = newScale
+                                                offset = Offset(newOffsetX, newOffsetY)
+                                            }
+
+                                            prevCentroid = currentCentroid
+                                            prevDistance = currentDistance
+                                            event.changes.forEach { it.consume() }
+
+                                        } else if (pressedPointers.size == 1 && !isMultiTouch) {
+                                            // UN SEUL DOIGT : RÉGLAGE DYNAMIQUE DU CENTRE ET DU DIAMÈTRE SANS DÉFILER LA PHOTO
+                                            val change = pressedPointers[0]
+                                            val currentScreenPos = change.position
+                                            lastScreenPos = currentScreenPos
+                                            val moveDist = hypot(currentScreenPos.x - firstDownPos.x, currentScreenPos.y - firstDownPos.y)
+                                            if (moveDist > 6f) {
+                                                dragMoved = true
+                                            }
+
+                                            val currentLocalX = (currentScreenPos.x - offset.x) / scale
+                                            val currentLocalY = (currentScreenPos.y - offset.y) / scale
+                                            val currentLocalPoint = Offset(currentLocalX, currentLocalY)
+
+                                            isUserDragging = true
+
+                                            when (activeMode) {
+                                                AnnotationMode.CALIBRATE -> {
+                                                    if (activeDragTarget == "CENTER") {
+                                                        // Déplacement dynamique du centre vert en gardant le doigt appuyé
+                                                        targetCenterPx = currentLocalPoint
+                                                        dragHudText = "🎯 Centre : (${currentLocalPoint.x.toInt()}, ${currentLocalPoint.y.toInt()})"
+
+                                                        // Recalcul en temps réel des coordonnées réelles des impacts
+                                                        if (pixelPerMm > 0f) {
+                                                            val updated = impactsList.map { imp ->
+                                                                val xMm = (imp.canvasOffset.x - currentLocalPoint.x) / pixelPerMm
+                                                                val yMm = (currentLocalPoint.y - imp.canvasOffset.y) / pixelPerMm
+                                                                val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
+                                                                imp.copy(realMm = Impact(xMm, yMm), score = sc, isInnerTen = inner)
+                                                            }
+                                                            impactsList.clear()
+                                                            impactsList.addAll(updated)
+                                                        }
+                                                    } else {
+                                                        // Ajustement dynamique du diamètre du visuel en gardant le doigt appuyé
+                                                        val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+                                                        val rPx = hypot(currentLocalPoint.x - center.x, currentLocalPoint.y - center.y)
+                                                        if (rPx > 10f && selectedCalibrationRef.radiusMm > 0f) {
+                                                            pixelPerMm = rPx / selectedCalibrationRef.radiusMm
+                                                            calibrationEdgePx = currentLocalPoint
+                                                            calibrationStep = CalibrationStep.CALIBRATED
+
+                                                            dragHudText = "📏 Visuel ${selectedCalibrationRef.diameterMm.toInt()} mm (${String.format(Locale.US, "%.2f", pixelPerMm)} px/mm)"
+
+                                                            // Recalcul en temps réel de tous les impacts avec la nouvelle échelle
+                                                            val updated = impactsList.map { imp ->
+                                                                val xMm = (imp.canvasOffset.x - center.x) / pixelPerMm
+                                                                val yMm = (center.y - imp.canvasOffset.y) / pixelPerMm
+                                                                val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
+                                                                imp.copy(realMm = Impact(xMm, yMm), score = sc, isInnerTen = inner)
+                                                            }
+                                                            impactsList.clear()
+                                                            impactsList.addAll(updated)
+                                                        }
                                                     }
+                                                    change.consume()
                                                 }
-                                                Toast.makeText(context, "Centre vert placé. Touchez maintenant le bord du visuel (${selectedCalibrationRef.diameterMm.toInt()} mm).", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                // CLICK_EDGE or CALIBRATED: click on edge of visual
-                                                val center = targetCenterPx ?: Offset(500f, 500f)
-                                                calibrationEdgePx = point
-                                                val rPx = hypot(point.x - center.x, point.y - center.y)
-                                                if (rPx > 5f && selectedCalibrationRef.radiusMm > 0f) {
-                                                    pixelPerMm = rPx / selectedCalibrationRef.radiusMm
-                                                    calibrationStep = CalibrationStep.CALIBRATED
-
-                                                    // Recalculate impacts with new scale and center
+                                                AnnotationMode.TARGET_CENTER -> {
+                                                    targetCenterPx = currentLocalPoint
+                                                    dragHudText = "🎯 Centre : (${currentLocalPoint.x.toInt()}, ${currentLocalPoint.y.toInt()})"
+                                                    val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
                                                     val updated = impactsList.map { imp ->
-                                                        val xMm = (imp.canvasOffset.x - center.x) / pixelPerMm
-                                                        val yMm = (center.y - imp.canvasOffset.y) / pixelPerMm
+                                                        val xMm = (imp.canvasOffset.x - currentLocalPoint.x) / pxMm
+                                                        val yMm = (currentLocalPoint.y - imp.canvasOffset.y) / pxMm
                                                         val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
-                                                        imp.copy(
-                                                            realMm = Impact(xMm, yMm),
-                                                            score = sc,
-                                                            isInnerTen = inner
-                                                        )
+                                                        imp.copy(realMm = Impact(xMm, yMm), score = sc, isInnerTen = inner)
                                                     }
                                                     impactsList.clear()
                                                     impactsList.addAll(updated)
-                                                    Toast.makeText(context, "Étalonnage réussi : visuel ${selectedCalibrationRef.diameterMm.toInt()} mm aligné !", Toast.LENGTH_SHORT).show()
+                                                    change.consume()
+                                                }
+                                                AnnotationMode.IMPACT -> {
+                                                    val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+                                                    val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
+                                                    val xMm = (currentLocalPoint.x - center.x) / pxMm
+                                                    val yMm = (center.y - currentLocalPoint.y) / pxMm
+                                                    val realImp = Impact(xMm, yMm)
+                                                    val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+                                                    val scoreLabel = if (inner) "10 Mouche" else "$sc pts"
+
+                                                    if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
+                                                        val idx = draggedImpactIndex!!
+                                                        impactsList[idx] = impactsList[idx].copy(
+                                                            canvasOffset = currentLocalPoint,
+                                                            realMm = realImp,
+                                                            score = sc,
+                                                            isInnerTen = inner
+                                                        )
+                                                        draggedImpactIndexState = idx
+                                                        dragHudText = "🎯 Coup #${impactsList[idx].index} : $scoreLabel (${String.format(Locale.US, "%+.1f", xMm)}, ${String.format(Locale.US, "%+.1f", yMm)} mm)"
+                                                    } else {
+                                                        // Glissement dynamique du nouvel impact en temps réel
+                                                        pendingImpactOffset = currentLocalPoint
+                                                        pendingImpactScore = Pair(sc, inner)
+                                                        dragHudText = "🎯 Coup #${impactsList.size + 1} : $scoreLabel (${String.format(Locale.US, "%+.1f", xMm)}, ${String.format(Locale.US, "%+.1f", yMm)} mm)"
+                                                    }
+                                                    change.consume()
                                                 }
                                             }
                                         }
-                                        AnnotationMode.TARGET_CENTER -> {
-                                            targetCenterPx = point
-                                            if (calibrationEdgePx != null && pixelPerMm > 0f && selectedCalibrationRef.radiusMm > 0f) {
-                                                val rPx = hypot(calibrationEdgePx!!.x - point.x, calibrationEdgePx!!.y - point.y)
-                                                pixelPerMm = rPx / selectedCalibrationRef.radiusMm
-                                            }
-                                            val pxPerMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                                            val updated = impactsList.map { imp ->
-                                                val xMm = (imp.canvasOffset.x - point.x) / pxPerMm
-                                                val yMm = (point.y - imp.canvasOffset.y) / pxPerMm
-                                                val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
-                                                imp.copy(
-                                                    realMm = Impact(xMm, yMm),
-                                                    score = sc,
-                                                    isInnerTen = inner
-                                                )
-                                            }
-                                            impactsList.clear()
-                                            impactsList.addAll(updated)
-                                        }
-                                        AnnotationMode.IMPACT -> {
-                                            // Check if user tapped an existing impact to edit it a posteriori!
-                                            val hitRadius = 25f
-                                            val clickedImpact = impactsList.find { imp ->
-                                                hypot(imp.canvasOffset.x - point.x, imp.canvasOffset.y - point.y) <= hitRadius
-                                            }
+                                    } while (event.changes.any { it.pressed })
 
-                                            if (clickedImpact != null) {
-                                                impactUnderEdit = clickedImpact
-                                                showImpactEditDialog = true
-                                            } else {
-                                                // Add new impact
-                                                val center = targetCenterPx ?: Offset(500f, 500f)
-                                                val pxPerMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                                                val xMm = (point.x - center.x) / pxPerMm
-                                                val yMm = (center.y - point.y) / pxPerMm
-                                                val realImpact = Impact(xMm, yMm)
-                                                val (scoreVal, isInner) = computeScoreForImpact(realImpact, targetTypeInput)
+                                    isUserDragging = false
+                                    dragHudText = ""
 
-                                                impactsList.add(
-                                                    ScreenImpact(
-                                                        index = impactsList.size + 1,
-                                                        canvasOffset = point,
-                                                        realMm = realImpact,
-                                                        score = scoreVal,
-                                                        isInnerTen = isInner
+                                    // Relâchement du doigt
+                                    if (!isMultiTouch) {
+                                        val upScreenPos = lastScreenPos
+                                        val localX = (upScreenPos.x - offset.x) / scale
+                                        val localY = (upScreenPos.y - offset.y) / scale
+                                        val upLocalPoint = Offset(localX, localY)
+                                        val totalMove = hypot(upScreenPos.x - firstDownPos.x, upScreenPos.y - firstDownPos.y)
+
+                                        when (activeMode) {
+                                            AnnotationMode.CALIBRATE -> {
+                                                if (activeDragTarget == "CENTER" || calibrationStep == CalibrationStep.SET_CENTER) {
+                                                    targetCenterPx = upLocalPoint
+                                                    calibrationStep = CalibrationStep.CLICK_EDGE
+                                                    Toast.makeText(context, "Centre vert positionné. Touchez ou glissez sur le bord du visuel noir (${selectedCalibrationRef.diameterMm.toInt()} mm).", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+                                                    val rPx = hypot(upLocalPoint.x - center.x, upLocalPoint.y - center.y)
+                                                    if (rPx > 10f && selectedCalibrationRef.radiusMm > 0f) {
+                                                        pixelPerMm = rPx / selectedCalibrationRef.radiusMm
+                                                        calibrationEdgePx = upLocalPoint
+                                                        calibrationStep = CalibrationStep.CALIBRATED
+                                                    }
+                                                }
+                                            }
+                                            AnnotationMode.TARGET_CENTER -> {
+                                                targetCenterPx = upLocalPoint
+                                            }
+                                            AnnotationMode.IMPACT -> {
+                                                val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+                                                val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
+                                                val xMm = (upLocalPoint.x - center.x) / pxMm
+                                                val yMm = (center.y - upLocalPoint.y) / pxMm
+                                                val realImp = Impact(xMm, yMm)
+                                                val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+
+                                                if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
+                                                    val idx = draggedImpactIndex!!
+                                                    if (totalMove < 12f) {
+                                                        // Tap court sans déplacement : ouvre le dialogue d'ajustement
+                                                        impactUnderEdit = impactsList[idx]
+                                                        showImpactEditDialog = true
+                                                    } else {
+                                                        // Déplacement finalisé par glissement
+                                                        impactsList[idx] = impactsList[idx].copy(
+                                                            canvasOffset = upLocalPoint,
+                                                            realMm = realImp,
+                                                            score = sc,
+                                                            isInnerTen = inner
+                                                        )
+                                                        val label = if (inner) "10 Mouche" else "$sc pts"
+                                                        Toast.makeText(context, "Coup #${impactsList[idx].index} ajusté ($label) !", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                } else {
+                                                    // Nouvel impact positionné au tap ou au glissement
+                                                    impactsList.add(
+                                                        ScreenImpact(
+                                                            index = impactsList.size + 1,
+                                                            canvasOffset = upLocalPoint,
+                                                            realMm = realImp,
+                                                            score = sc,
+                                                            isInnerTen = inner
+                                                        )
                                                     )
-                                                )
+                                                }
+                                                pendingImpactOffset = null
+                                                pendingImpactScore = null
+                                                draggedImpactIndexState = null
                                             }
                                         }
                                     }
                                 }
                             }
-                            .testTag("target_photo_canvas"),
-                        contentAlignment = Alignment.Center
+                            .testTag("target_photo_canvas")
                     ) {
-                        if (selectedImageUri != null) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(context).data(selectedImageUri).crossfade(true).build(),
-                                contentDescription = "Cible de tir",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer {
-                                        scaleX = scale
-                                        scaleY = scale
-                                        translationX = offset.x
-                                        translationY = offset.y
-                                    }
-                            )
-                        } else {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-                                Icon(imageVector = Icons.Default.PhotoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(48.dp))
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text("Touchez « Charger photo » ou touchez directement la cible pour placer des impacts.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                        val currentWidthPx = constraints.maxWidth.toFloat()
+                        val currentHeightPx = constraints.maxHeight.toFloat()
+                        LaunchedEffect(currentWidthPx, currentHeightPx) {
+                            if (currentWidthPx > 0f && currentHeightPx > 0f) {
+                                canvasWidthPx = currentWidthPx
+                                canvasHeightPx = currentHeightPx
+                                if (targetCenterPx == null) {
+                                    targetCenterPx = Offset(currentWidthPx / 2f, currentHeightPx / 2f)
+                                }
                             }
                         }
 
-                        Canvas(
+                        // CONTENEUR TRANSFORMÉ UNIQUE : La photo et le canvas partagent exactement le même espace de coordonnées
+                        Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
@@ -1550,134 +1722,258 @@ fun TirTrackerApp() {
                                     scaleY = scale
                                     translationX = offset.x
                                     translationY = offset.y
+                                    transformOrigin = TransformOrigin(0f, 0f)
                                 }
                         ) {
-                            if (targetCenterPx == null) {
-                                targetCenterPx = Offset(size.width / 2f, size.height / 2f)
+                            if (selectedImageUri != null) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context).data(selectedImageUri).crossfade(true).build(),
+                                    contentDescription = "Cible de tir",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                    modifier = Modifier.fillMaxSize().padding(24.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.PhotoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(48.dp))
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text("Touchez « Charger photo » ou touchez directement la cible pour placer des impacts.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                                }
                             }
 
-                            targetCenterPx?.let { c ->
-                                val r = 16f
-                                drawCircle(color = Color(0xFF10B981), radius = r, center = c, style = Stroke(width = 2.5f))
-                                drawCircle(color = Color(0xFF10B981), radius = 3f, center = c)
-                                val arm = 26f
-                                drawLine(color = Color(0xFF10B981), start = Offset(c.x - arm, c.y), end = Offset(c.x + arm, c.y), strokeWidth = 2f)
-                                drawLine(color = Color(0xFF10B981), start = Offset(c.x, c.y - arm), end = Offset(c.x, c.y + arm), strokeWidth = 2f)
-                            }
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val center = targetCenterPx ?: Offset(size.width / 2f, size.height / 2f)
 
-                            // Calibration visual ring overlay
-                            if (pixelPerMm > 0f && targetCenterPx != null) {
-                                val c = targetCenterPx!!
-                                val visualRadiusPx = selectedCalibrationRef.radiusMm * pixelPerMm
+                                // Centre de la cible (croix et réticule vert)
+                                val r = 18f
+                                drawCircle(color = Color(0xFF10B981).copy(alpha = 0.35f), radius = r + 6f, center = center)
+                                drawCircle(color = Color(0xFF10B981), radius = r, center = center, style = Stroke(width = 2.5f))
+                                drawCircle(color = Color(0xFF10B981), radius = 3.5f, center = center)
+                                val arm = 28f
+                                drawLine(color = Color(0xFF10B981), start = Offset(center.x - arm, center.y), end = Offset(center.x + arm, center.y), strokeWidth = 2.2f)
+                                drawLine(color = Color(0xFF10B981), start = Offset(center.x, center.y - arm), end = Offset(center.x, center.y + arm), strokeWidth = 2.2f)
 
-                                if (activeMode == AnnotationMode.CALIBRATE) {
-                                    // Highlighted ring in calibration mode
-                                    drawCircle(
-                                        color = Color(0xFFFBBF24).copy(alpha = 0.12f),
-                                        radius = visualRadiusPx,
-                                        center = c
-                                    )
-                                    drawCircle(
-                                        color = Color(0xFFFBBF24),
-                                        radius = visualRadiusPx,
-                                        center = c,
-                                        style = Stroke(
-                                            width = 2.5f,
-                                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+                                // Anneau d'étalonnage du visuel cible
+                                if (pixelPerMm > 0f) {
+                                    val visualRadiusPx = selectedCalibrationRef.radiusMm * pixelPerMm
+
+                                    if (activeMode == AnnotationMode.CALIBRATE) {
+                                        // Anneau visible et poignée d'ajustement en mode calibration
+                                        drawCircle(
+                                            color = Color(0xFFFBBF24).copy(alpha = 0.15f),
+                                            radius = visualRadiusPx,
+                                            center = center
                                         )
-                                    )
+                                        drawCircle(
+                                            color = Color(0xFFFBBF24),
+                                            radius = visualRadiusPx,
+                                            center = center,
+                                            style = Stroke(
+                                                width = 3f,
+                                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
+                                            )
+                                        )
 
-                                    calibrationEdgePx?.let { edge ->
-                                        drawCircle(color = Color(0xFFFBBF24), radius = 6f, center = edge)
-                                        drawCircle(color = Color.White, radius = 6f, center = edge, style = Stroke(width = 1.5f))
+                                        // Poignée d'ajustement sur le bord du visuel
+                                        val edgePoint = calibrationEdgePx ?: Offset(center.x + visualRadiusPx, center.y)
+                                        drawCircle(color = Color(0xFFFBBF24).copy(alpha = 0.4f), radius = 14f, center = edgePoint)
+                                        drawCircle(color = Color(0xFFFBBF24), radius = 7f, center = edgePoint)
+                                        drawCircle(color = Color.White, radius = 7f, center = edgePoint, style = Stroke(width = 2f))
+
                                         drawLine(
-                                            color = Color(0xFFFBBF24).copy(alpha = 0.8f),
-                                            start = c,
-                                            end = edge,
+                                            color = Color(0xFFFBBF24).copy(alpha = 0.85f),
+                                            start = center,
+                                            end = edgePoint,
                                             strokeWidth = 2f,
                                             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f), 0f)
                                         )
+
+                                        val label = "${selectedCalibrationRef.diameterMm.toInt()} mm (${selectedCalibrationRef.shortName})"
+                                        val textLayout = textMeasurer.measure(
+                                            label,
+                                            style = TextStyle(
+                                                color = Color(0xFFFBBF24),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        )
+                                        drawText(
+                                            textLayoutResult = textLayout,
+                                            topLeft = Offset(center.x - textLayout.size.width / 2f, center.y - visualRadiusPx - textLayout.size.height - 6f)
+                                        )
+                                    } else {
+                                        // Anneau discret en mode tir
+                                        drawCircle(
+                                            color = Color(0xFFFBBF24).copy(alpha = 0.35f),
+                                            radius = visualRadiusPx,
+                                            center = center,
+                                            style = Stroke(width = 1.5f)
+                                        )
+                                    }
+                                }
+
+                                // Cercle de groupement (hors flyers)
+                                val validImpacts = impactsList.filter { !it.isFlyer }
+                                if (validImpacts.size >= 2) {
+                                    var sumX = 0f
+                                    var sumY = 0f
+                                    for (imp in validImpacts) {
+                                        sumX += imp.canvasOffset.x
+                                        sumY += imp.canvasOffset.y
+                                    }
+                                    val mpiPos = Offset(sumX / validImpacts.size, sumY / validImpacts.size)
+
+                                    var maxRadius = 0f
+                                    for (imp in validImpacts) {
+                                        val d = hypot(imp.canvasOffset.x - mpiPos.x, imp.canvasOffset.y - mpiPos.y)
+                                        if (d > maxRadius) maxRadius = d
                                     }
 
-                                    val label = "${selectedCalibrationRef.diameterMm.toInt()} mm (${selectedCalibrationRef.shortName})"
-                                    val textLayout = textMeasurer.measure(
-                                        label,
-                                        style = TextStyle(
-                                            color = Color(0xFFFBBF24),
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                    drawCircle(
+                                        color = Color(0xFF38BDF8).copy(alpha = 0.65f),
+                                        radius = maxRadius + 8f,
+                                        center = mpiPos,
+                                        style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f))
+                                    )
+
+                                    val mpiArm = 18f
+                                    drawCircle(color = Color(0xFF0284C7), radius = 4f, center = mpiPos)
+                                    drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x - mpiArm, mpiPos.y), end = Offset(mpiPos.x + mpiArm, mpiPos.y), strokeWidth = 2.5f)
+                                    drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x, mpiPos.y - mpiArm), end = Offset(mpiPos.x, mpiPos.y + mpiArm), strokeWidth = 2.5f)
+                                }
+
+                                // Dessin des impacts avec numérotation
+                                val radius = 13f
+                                impactsList.forEachIndexed { idx, imp ->
+                                    val pos = imp.canvasOffset
+                                    val isLatest = idx == impactsList.lastIndex
+                                    val isBeingDragged = draggedImpactIndexState == idx
+
+                                    if (isBeingDragged) {
+                                        // Réticule et halo d'ajustement en temps réel pour l'impact déplacé
+                                        val arm = 24f
+                                        drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f, center = pos)
+                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f)
+                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f)
+                                    }
+
+                                    drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = radius + 2f, center = Offset(pos.x + 1f, pos.y + 1f))
+                                    val impactColor = when {
+                                        imp.isFlyer -> Color(0xFF6B7280) // Flyer grisé
+                                        imp.isInnerTen -> Color(0xFF10B981) // Mouche verte
+                                        imp.score == 10 -> Color(0xFFEAB308) // 10 doré
+                                        isLatest || isBeingDragged -> Color(0xFFFF3B30)
+                                        else -> Color(0xFFDC2626)
+                                    }
+                                    drawCircle(color = impactColor, radius = radius, center = pos)
+                                    drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = if (isBeingDragged) 2.8f else 2f))
+
+                                    val numLayout = textMeasurer.measure(
+                                        imp.index.toString(),
+                                        style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
                                     )
                                     drawText(
-                                        textLayoutResult = textLayout,
-                                        topLeft = Offset(c.x - textLayout.size.width / 2f, c.y - visualRadiusPx - textLayout.size.height - 4f)
+                                        textLayoutResult = numLayout,
+                                        topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
+                                    )
+                                }
+
+                                // Dessin du nouvel impact en cours d'ajustement dynamique au doigt
+                                pendingImpactOffset?.let { pos ->
+                                    val newIdx = impactsList.size + 1
+                                    val arm = 24f
+                                    drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f, center = pos)
+                                    drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f)
+                                    drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f)
+
+                                    val (sc, inner) = pendingImpactScore ?: Pair(10, false)
+                                    val impactColor = when {
+                                        inner -> Color(0xFF10B981)
+                                        sc == 10 -> Color(0xFFEAB308)
+                                        else -> Color(0xFFFF3B30)
+                                    }
+                                    drawCircle(color = impactColor, radius = radius, center = pos)
+                                    drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = 2.8f))
+
+                                    val numLayout = textMeasurer.measure(
+                                        newIdx.toString(),
+                                        style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                    )
+                                    drawText(
+                                        textLayoutResult = numLayout,
+                                        topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
+                                    )
+                                }
+                            }
+                        }
+
+                        // HUD FLOTTANT SUPÉRIEUR : Affiche les instructions et les valeurs en direct lors du glissement
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 8.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color(0xDD0F172A),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x40FFFFFF))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                if (isUserDragging && dragHudText.isNotBlank()) {
+                                    Text(
+                                        text = dragHudText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFFBBF24),
+                                        fontWeight = FontWeight.Bold
                                     )
                                 } else {
-                                    // Subtle reference ring in other modes
-                                    drawCircle(
-                                        color = Color(0xFFFBBF24).copy(alpha = 0.25f),
-                                        radius = visualRadiusPx,
-                                        center = c,
-                                        style = Stroke(width = 1.2f)
+                                    val modeText = when (activeMode) {
+                                        AnnotationMode.CALIBRATE -> {
+                                            if (calibrationStep == CalibrationStep.SET_CENTER) "🎯 Glissez le doigt pour centrer la croix verte • 2 doigts pour défiler/zoomer"
+                                            else "📏 Glissez le doigt pour ajuster le diamètre • 2 doigts pour défiler/zoomer"
+                                        }
+                                        AnnotationMode.TARGET_CENTER -> "🎯 Glissez le doigt pour ajuster le centre • 2 doigts pour défiler/zoomer"
+                                        AnnotationMode.IMPACT -> "🔴 Touchez ou glissez le doigt pour placer / ajuster les impacts • 2 doigts pour défiler/zoomer"
+                                    }
+                                    Text(
+                                        text = modeText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFE2E8F0),
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 10.sp
                                     )
                                 }
                             }
+                        }
 
-                            // Grouping circle (ignoring flyers)
-                            val validImpacts = impactsList.filter { !it.isFlyer }
-                            if (validImpacts.size >= 2) {
-                                var sumX = 0f
-                                var sumY = 0f
-                                for (imp in validImpacts) {
-                                    sumX += imp.canvasOffset.x
-                                    sumY += imp.canvasOffset.y
+                        // BADGE INDICATEUR DE ZOOM EN BAS À DROITE
+                        if (scale > 1.05f || offset != Offset.Zero) {
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xDD000000)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clickable { scale = 1f; offset = Offset.Zero }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "${String.format(Locale.US, "%.1f", scale)}x (RàZ)",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
-                                val mpiPos = Offset(sumX / validImpacts.size, sumY / validImpacts.size)
-
-                                var maxRadius = 0f
-                                for (imp in validImpacts) {
-                                    val d = hypot(imp.canvasOffset.x - mpiPos.x, imp.canvasOffset.y - mpiPos.y)
-                                    if (d > maxRadius) maxRadius = d
-                                }
-
-                                drawCircle(
-                                    color = Color(0xFF38BDF8).copy(alpha = 0.65f),
-                                    radius = maxRadius + 8f,
-                                    center = mpiPos,
-                                    style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f))
-                                )
-
-                                val mpiArm = 18f
-                                drawCircle(color = Color(0xFF0284C7), radius = 4f, center = mpiPos)
-                                drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x - mpiArm, mpiPos.y), end = Offset(mpiPos.x + mpiArm, mpiPos.y), strokeWidth = 2.5f)
-                                drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x, mpiPos.y - mpiArm), end = Offset(mpiPos.x, mpiPos.y + mpiArm), strokeWidth = 2.5f)
-                            }
-
-                            // Draw each impact
-                            val radius = 13f
-                            impactsList.forEachIndexed { idx, imp ->
-                                val pos = imp.canvasOffset
-                                val isLatest = idx == impactsList.lastIndex
-
-                                drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = radius + 2f, center = Offset(pos.x + 1f, pos.y + 1f))
-                                val impactColor = when {
-                                    imp.isFlyer -> Color(0xFF6B7280) // Grayed out flyer
-                                    imp.isInnerTen -> Color(0xFF10B981) // Green Mouche
-                                    imp.score == 10 -> Color(0xFFEAB308) // Gold 10
-                                    isLatest -> Color(0xFFFF3B30)
-                                    else -> Color(0xFFDC2626)
-                                }
-                                drawCircle(color = impactColor, radius = radius, center = pos)
-                                drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = 2f))
-
-                                val numLayout = textMeasurer.measure(
-                                    imp.index.toString(),
-                                    style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
-                                )
-                                drawText(
-                                    textLayoutResult = numLayout,
-                                    topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
-                                )
                             }
                         }
                     }
