@@ -136,9 +136,13 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.domain.BallisticsCalculator
+import com.example.domain.CalibrationReference
 import com.example.domain.Impact
+import com.example.domain.TargetCalibrationDefaults
 import com.example.domain.TargetDetectionResult
 import com.example.domain.TargetRecognitionEngine
+import com.example.ui.components.CalibrationAssistantPanel
+import com.example.ui.components.CalibrationStep
 import com.example.ui.components.ChartDisplayType
 import com.example.ui.components.MoaProgressionChart
 import com.example.ui.components.SessionChartData
@@ -335,10 +339,18 @@ fun TirTrackerApp() {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
 
-    val calibrationPoints = remember { mutableStateListOf<Offset>() }
+    var selectedCalibrationRef by remember {
+        mutableStateOf(TargetCalibrationDefaults.references[0])
+    }
+    var calibrationStep by remember { mutableStateOf(CalibrationStep.SET_CENTER) }
+    var calibrationEdgePx by remember { mutableStateOf<Offset?>(null) }
     var pixelPerMm by remember { mutableFloatStateOf(0f) }
-    var showCalibrationDialog by remember { mutableStateOf(false) }
-    var calibrationDistanceMmInput by remember { mutableStateOf("50") }
+
+    // Keep calibration preset in sync with target type selection
+    LaunchedEffect(targetTypeInput) {
+        val matchingRef = TargetCalibrationDefaults.getReferenceForTargetType(targetTypeInput)
+        selectedCalibrationRef = matchingRef
+    }
 
     var targetCenterPx by remember { mutableStateOf<Offset?>(null) }
     val impactsList = remember { mutableStateListOf<ScreenImpact>() }
@@ -943,77 +955,6 @@ fun TirTrackerApp() {
         )
     }
 
-    // DIALOG: Étalonnage manuel de l'échelle
-    if (showCalibrationDialog && calibrationPoints.size == 2) {
-        val p1 = calibrationPoints[0]
-        val p2 = calibrationPoints[1]
-        val pixelDist = hypot(p1.x - p2.x, p1.y - p2.y)
-
-        AlertDialog(
-            onDismissRequest = { showCalibrationDialog = false },
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            title = { Text("Étalonnage manuel de l'échelle", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text("Distance mesurée : ${String.format(Locale.US, "%.1f", pixelDist)} px")
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        "Indiquez la distance réelle connue entre ces deux points en millimètres (ex: 200 mm pour visuel C50, 50 mm, etc.) :",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = calibrationDistanceMmInput,
-                        onValueChange = { calibrationDistanceMmInput = it },
-                        label = { Text("Distance réelle (mm)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("25", "50", "100", "200").forEach { dist ->
-                            OutlinedButton(
-                                onClick = { calibrationDistanceMmInput = dist },
-                                contentPadding = ButtonDefaults.TextButtonContentPadding
-                            ) {
-                                Text("${dist}mm", fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val realMm = calibrationDistanceMmInput.toFloatOrNull() ?: 50f
-                        if (realMm > 0f && pixelDist > 0f) {
-                            pixelPerMm = pixelDist / realMm
-                            val center = targetCenterPx ?: Offset(500f, 500f)
-                            val updated = impactsList.map { p ->
-                                val xMm = (p.canvasOffset.x - center.x) / pixelPerMm
-                                val yMm = (center.y - p.canvasOffset.y) / pixelPerMm
-                                p.copy(realMm = Impact(xMm, yMm))
-                            }
-                            impactsList.clear()
-                            impactsList.addAll(updated)
-                            activeMode = AnnotationMode.IMPACT
-                            Toast.makeText(context, "Échelle définie : ${String.format(Locale.US, "%.2f", pixelPerMm)} px/mm", Toast.LENGTH_SHORT).show()
-                        }
-                        showCalibrationDialog = false
-                    }
-                ) { Text("Valider") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    calibrationPoints.clear()
-                    showCalibrationDialog = false
-                }) { Text("Annuler") }
-            }
-        )
-    }
-
     // DIALOG: Graphique d'évolution MOA
     if (showChartDialog) {
         val historyList = remember(savedSessionsList) { savedSessionsList }
@@ -1342,10 +1283,19 @@ fun TirTrackerApp() {
                         ) {
                             FilterChip(
                                 selected = activeMode == AnnotationMode.CALIBRATE,
-                                onClick = { activeMode = AnnotationMode.CALIBRATE },
-                                label = { Text("Calibrer", fontSize = 13.sp) },
+                                onClick = {
+                                    activeMode = AnnotationMode.CALIBRATE
+                                    if (targetCenterPx == null) {
+                                        calibrationStep = CalibrationStep.SET_CENTER
+                                    } else if (calibrationEdgePx == null) {
+                                        calibrationStep = CalibrationStep.CLICK_EDGE
+                                    } else {
+                                        calibrationStep = CalibrationStep.CALIBRATED
+                                    }
+                                },
+                                label = { Text("Calibrer visuel", fontSize = 13.sp) },
                                 leadingIcon = { Icon(imageVector = Icons.Default.Straighten, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp)) },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1.2f),
                                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFF59E0B).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFBBF24))
                             )
                             FilterChip(
@@ -1353,7 +1303,7 @@ fun TirTrackerApp() {
                                 onClick = { activeMode = AnnotationMode.TARGET_CENTER },
                                 label = { Text("Centre", fontSize = 13.sp) },
                                 leadingIcon = { Icon(imageVector = Icons.Default.CenterFocusStrong, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp)) },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(0.9f),
                                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF10B981).copy(alpha = 0.25f), selectedLabelColor = Color(0xFF34D399))
                             )
                             FilterChip(
@@ -1361,10 +1311,34 @@ fun TirTrackerApp() {
                                 onClick = { activeMode = AnnotationMode.IMPACT },
                                 label = { Text("Impact", fontSize = 13.sp) },
                                 leadingIcon = { Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp)) },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(0.9f),
                                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFEF4444).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFF6B6B))
                             )
                         }
+                    }
+
+                    // Panneau d'assistance guidé à la calibration du visuel
+                    if (activeMode == AnnotationMode.CALIBRATE) {
+                        CalibrationAssistantPanel(
+                            selectedReference = selectedCalibrationRef,
+                            onSelectReference = { ref ->
+                                selectedCalibrationRef = ref
+                                if (calibrationEdgePx != null && targetCenterPx != null) {
+                                    val rPx = hypot(calibrationEdgePx!!.x - targetCenterPx!!.x, calibrationEdgePx!!.y - targetCenterPx!!.y)
+                                    if (rPx > 5f && ref.radiusMm > 0f) {
+                                        pixelPerMm = rPx / ref.radiusMm
+                                    }
+                                }
+                            },
+                            currentStep = calibrationStep,
+                            onStepChange = { step -> calibrationStep = step },
+                            pixelPerMm = pixelPerMm,
+                            isCenterPlaced = targetCenterPx != null,
+                            onFinishCalibration = {
+                                activeMode = AnnotationMode.IMPACT
+                                Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
+                            }
+                        )
                     }
 
                     // 3. PHOTO LOADER & RECONNAISSANCE AUTOMATIQUE
@@ -1445,7 +1419,7 @@ fun TirTrackerApp() {
                                     offset += pan
                                 }
                             }
-                            .pointerInput(activeMode, pixelPerMm, targetCenterPx, targetTypeInput) {
+                            .pointerInput(activeMode, pixelPerMm, targetCenterPx, targetTypeInput, calibrationStep, selectedCalibrationRef) {
                                 detectTapGestures { tapPos ->
                                     val unscaledX = (tapPos.x - offset.x) / scale
                                     val unscaledY = (tapPos.y - offset.y) / scale
@@ -1453,16 +1427,49 @@ fun TirTrackerApp() {
 
                                     when (activeMode) {
                                         AnnotationMode.CALIBRATE -> {
-                                            if (calibrationPoints.size < 2) {
-                                                calibrationPoints.add(point)
-                                                if (calibrationPoints.size == 2) showCalibrationDialog = true
+                                            if (calibrationStep == CalibrationStep.SET_CENTER) {
+                                                targetCenterPx = point
+                                                calibrationStep = CalibrationStep.CLICK_EDGE
+                                                if (calibrationEdgePx != null) {
+                                                    val rPx = hypot(calibrationEdgePx!!.x - point.x, calibrationEdgePx!!.y - point.y)
+                                                    if (rPx > 5f && selectedCalibrationRef.radiusMm > 0f) {
+                                                        pixelPerMm = rPx / selectedCalibrationRef.radiusMm
+                                                        calibrationStep = CalibrationStep.CALIBRATED
+                                                    }
+                                                }
+                                                Toast.makeText(context, "Centre vert placé. Touchez maintenant le bord du visuel (${selectedCalibrationRef.diameterMm.toInt()} mm).", Toast.LENGTH_SHORT).show()
                                             } else {
-                                                calibrationPoints.clear()
-                                                calibrationPoints.add(point)
+                                                // CLICK_EDGE or CALIBRATED: click on edge of visual
+                                                val center = targetCenterPx ?: Offset(500f, 500f)
+                                                calibrationEdgePx = point
+                                                val rPx = hypot(point.x - center.x, point.y - center.y)
+                                                if (rPx > 5f && selectedCalibrationRef.radiusMm > 0f) {
+                                                    pixelPerMm = rPx / selectedCalibrationRef.radiusMm
+                                                    calibrationStep = CalibrationStep.CALIBRATED
+
+                                                    // Recalculate impacts with new scale and center
+                                                    val updated = impactsList.map { imp ->
+                                                        val xMm = (imp.canvasOffset.x - center.x) / pixelPerMm
+                                                        val yMm = (center.y - imp.canvasOffset.y) / pixelPerMm
+                                                        val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
+                                                        imp.copy(
+                                                            realMm = Impact(xMm, yMm),
+                                                            score = sc,
+                                                            isInnerTen = inner
+                                                        )
+                                                    }
+                                                    impactsList.clear()
+                                                    impactsList.addAll(updated)
+                                                    Toast.makeText(context, "Étalonnage réussi : visuel ${selectedCalibrationRef.diameterMm.toInt()} mm aligné !", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
                                         AnnotationMode.TARGET_CENTER -> {
                                             targetCenterPx = point
+                                            if (calibrationEdgePx != null && pixelPerMm > 0f && selectedCalibrationRef.radiusMm > 0f) {
+                                                val rPx = hypot(calibrationEdgePx!!.x - point.x, calibrationEdgePx!!.y - point.y)
+                                                pixelPerMm = rPx / selectedCalibrationRef.radiusMm
+                                            }
                                             val pxPerMm = if (pixelPerMm > 0f) pixelPerMm else 4f
                                             val updated = impactsList.map { imp ->
                                                 val xMm = (imp.canvasOffset.x - point.x) / pxPerMm
@@ -1558,18 +1565,60 @@ fun TirTrackerApp() {
                                 drawLine(color = Color(0xFF10B981), start = Offset(c.x, c.y - arm), end = Offset(c.x, c.y + arm), strokeWidth = 2f)
                             }
 
-                            if (calibrationPoints.isNotEmpty()) {
-                                for (cp in calibrationPoints) {
-                                    drawCircle(color = Color(0xFFF59E0B), radius = 7f, center = cp)
-                                    drawCircle(color = Color.White, radius = 7f, center = cp, style = Stroke(width = 2f))
-                                }
-                                if (calibrationPoints.size == 2) {
-                                    drawLine(
-                                        color = Color(0xFFF59E0B),
-                                        start = calibrationPoints[0],
-                                        end = calibrationPoints[1],
-                                        strokeWidth = 3f,
-                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                            // Calibration visual ring overlay
+                            if (pixelPerMm > 0f && targetCenterPx != null) {
+                                val c = targetCenterPx!!
+                                val visualRadiusPx = selectedCalibrationRef.radiusMm * pixelPerMm
+
+                                if (activeMode == AnnotationMode.CALIBRATE) {
+                                    // Highlighted ring in calibration mode
+                                    drawCircle(
+                                        color = Color(0xFFFBBF24).copy(alpha = 0.12f),
+                                        radius = visualRadiusPx,
+                                        center = c
+                                    )
+                                    drawCircle(
+                                        color = Color(0xFFFBBF24),
+                                        radius = visualRadiusPx,
+                                        center = c,
+                                        style = Stroke(
+                                            width = 2.5f,
+                                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f)
+                                        )
+                                    )
+
+                                    calibrationEdgePx?.let { edge ->
+                                        drawCircle(color = Color(0xFFFBBF24), radius = 6f, center = edge)
+                                        drawCircle(color = Color.White, radius = 6f, center = edge, style = Stroke(width = 1.5f))
+                                        drawLine(
+                                            color = Color(0xFFFBBF24).copy(alpha = 0.8f),
+                                            start = c,
+                                            end = edge,
+                                            strokeWidth = 2f,
+                                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f), 0f)
+                                        )
+                                    }
+
+                                    val label = "${selectedCalibrationRef.diameterMm.toInt()} mm (${selectedCalibrationRef.shortName})"
+                                    val textLayout = textMeasurer.measure(
+                                        label,
+                                        style = TextStyle(
+                                            color = Color(0xFFFBBF24),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                    drawText(
+                                        textLayoutResult = textLayout,
+                                        topLeft = Offset(c.x - textLayout.size.width / 2f, c.y - visualRadiusPx - textLayout.size.height - 4f)
+                                    )
+                                } else {
+                                    // Subtle reference ring in other modes
+                                    drawCircle(
+                                        color = Color(0xFFFBBF24).copy(alpha = 0.25f),
+                                        radius = visualRadiusPx,
+                                        center = c,
+                                        style = Stroke(width = 1.2f)
                                     )
                                 }
                             }
