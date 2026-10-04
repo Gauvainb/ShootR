@@ -29,6 +29,136 @@ data class TargetDetectionResult(
 
 object TargetRecognitionEngine {
 
+    suspend fun detectImpacts(context: Context, imageUri: Uri, detectedTarget: TargetDetectionResult): List<Impact> = withContext(Dispatchers.Default) {
+        val impactsList = mutableListOf<Impact>()
+        try {
+            // Load a reasonably sized bitmap to detect bullet holes
+            val bitmap = decodeSampledBitmap(context, imageUri, reqWidth = 800, reqHeight = 800)
+                ?: return@withContext emptyList()
+
+            val width = bitmap.width
+            val height = bitmap.height
+            if (width < 100 || height < 100) return@withContext emptyList()
+
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            val luma = FloatArray(width * height)
+            var minLuma = 255f
+            var maxLuma = 0f
+
+            for (i in pixels.indices) {
+                val c = pixels[i]
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                val lum = 0.299f * r + 0.587f * g + 0.114f * b
+                luma[i] = lum
+                if (lum < minLuma) minLuma = lum
+                if (lum > maxLuma) maxLuma = lum
+            }
+
+            val targetCenterX = (detectedTarget.detectedCenterNormalized.x * width).toInt()
+            val targetCenterY = (detectedTarget.detectedCenterNormalized.y * height).toInt()
+            val targetRadiusPx = (detectedTarget.detectedBlackRadiusNormalized * width)
+
+            val darkThreshold = minLuma + (maxLuma - minLuma) * 0.45f
+            val brightThreshold = minLuma + (maxLuma - minLuma) * 0.75f
+
+            val visited = BooleanArray(width * height)
+
+            // Extremely simplified connected components for blobs (bullet holes)
+            val expectedHoleRadiusPx = width * 0.015f // Approx size of bullet hole relative to image width
+            val minBlobSize = (Math.PI * (expectedHoleRadiusPx * 0.4f) * (expectedHoleRadiusPx * 0.4f)).toInt()
+            val maxBlobSize = (Math.PI * (expectedHoleRadiusPx * 2.5f) * (expectedHoleRadiusPx * 2.5f)).toInt()
+
+            for (y in 5 until height - 5) {
+                for (x in 5 until width - 5) {
+                    val idx = y * width + x
+                    if (visited[idx]) continue
+
+                    val currentLuma = luma[idx]
+
+                    // A hole is usually a very dark spot on the white paper OR a bright spot (light shining through) on the black visual
+                    val distToCenter = hypot((x - targetCenterX).toFloat(), (y - targetCenterY).toFloat())
+                    val isInsideBlackVisual = distToCenter < targetRadiusPx
+
+                    val isHoleCandidate = if (isInsideBlackVisual) {
+                        currentLuma > brightThreshold // Light shining through dark paper
+                    } else {
+                        currentLuma < darkThreshold // Dark hole on white paper
+                    }
+
+                    if (isHoleCandidate) {
+                        // Flood fill to find blob
+                        val blobPixels = mutableListOf<Pair<Int, Int>>()
+                        val queue = mutableListOf(Pair(x, y))
+                        visited[idx] = true
+
+                        var qIdx = 0
+                        while (qIdx < queue.size) {
+                            val (cx, cy) = queue[qIdx++]
+                            blobPixels.add(Pair(cx, cy))
+
+                            // If blob gets insanely huge, it's not a bullet hole, stop exploring it completely
+                            if (blobPixels.size > maxBlobSize * 3) {
+                                break
+                            }
+
+                            // Check neighbors
+                            for (dy in -1..1) {
+                                for (dx in -1..1) {
+                                    if (dx == 0 && dy == 0) continue
+                                    val nx = cx + dx
+                                    val ny = cy + dy
+                                    if (nx in 0 until width && ny in 0 until height) {
+                                        val nIdx = ny * width + nx
+                                        if (!visited[nIdx]) {
+                                            val nLuma = luma[nIdx]
+                                            val nIsCandidate = if (isInsideBlackVisual) nLuma > brightThreshold else nLuma < darkThreshold
+                                            if (nIsCandidate) {
+                                                visited[nIdx] = true
+                                                queue.add(Pair(nx, ny))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // We only process complete blobs to avoid breaking large shadows into smaller hole-sized pieces
+                        if (qIdx == queue.size && blobPixels.size in minBlobSize..maxBlobSize) {
+                            // Calculate center of mass
+                            var sumX = 0.0
+                            var sumY = 0.0
+                            for (p in blobPixels) {
+                                sumX += p.first
+                                sumY += p.second
+                            }
+                            val cx = (sumX / blobPixels.size).toFloat()
+                            val cy = (sumY / blobPixels.size).toFloat()
+
+                            // Convert to normalized coordinates (0..1) then relative to center
+                            // X is positive to the right, Y is positive up
+                            val normX = cx / width
+                            val normY = cy / height
+
+                            val relNormX = normX - detectedTarget.detectedCenterNormalized.x
+                            val relNormY = detectedTarget.detectedCenterNormalized.y - normY
+
+                            impactsList.add(Impact(relNormX, relNormY))
+                        }
+                    } else {
+                        visited[idx] = true
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        impactsList
+    }
+
     suspend fun analyzeImage(context: Context, imageUri: Uri): TargetDetectionResult = withContext(Dispatchers.Default) {
         try {
             val bitmap = decodeSampledBitmap(context, imageUri, reqWidth = 400, reqHeight = 400)
