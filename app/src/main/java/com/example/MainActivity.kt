@@ -1397,6 +1397,62 @@ fun TirTrackerApp() {
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text("Scanner cible", fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
                                 }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                OutlinedButton(
+                                    onClick = {
+                                        if (selectedImageUri == null) return@OutlinedButton
+
+                                        coroutineScope.launch {
+                                            val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+                                            val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
+
+                                            // Make sure we have detectedTargetResult. If not we could analyze image first
+                                            val targetRes = detectedTargetResult ?: TargetRecognitionEngine.analyzeImage(context, selectedImageUri!!)
+
+                                            val newImpacts = TargetRecognitionEngine.detectImpacts(context, selectedImageUri!!, targetRes)
+
+                                            // The algorithm returns impacts in normalized coordinates relative to center (0..1 scale)
+                                            // X is positive to right, Y is positive to top
+                                            val mappedImpacts = newImpacts.mapIndexed { idx, relNormImp ->
+                                                val normX = relNormImp.xMm + targetRes.detectedCenterNormalized.x
+                                                val normY = targetRes.detectedCenterNormalized.y - relNormImp.yMm
+
+                                                val canvasX = normX * canvasWidthPx
+                                                val canvasY = normY * canvasHeightPx
+                                                val canvasOffset = Offset(canvasX, canvasY)
+
+                                                val relXMm = (canvasX - center.x) / pxMm
+                                                val relYMm = (center.y - canvasY) / pxMm
+                                                val realImp = Impact(relXMm, relYMm)
+
+                                                val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+
+                                                ScreenImpact(
+                                                    index = impactsList.size + idx + 1,
+                                                    canvasOffset = canvasOffset,
+                                                    realMm = realImp,
+                                                    score = sc,
+                                                    isInnerTen = inner
+                                                )
+                                            }
+
+                                            impactsList.addAll(mappedImpacts)
+                                            if (mappedImpacts.isNotEmpty()) {
+                                                Toast.makeText(context, "${mappedImpacts.size} impacts détectés automatiquement", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Aucun impact détecté", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.height(44.dp),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Auto-detect", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                                }
                             }
                         }
 
