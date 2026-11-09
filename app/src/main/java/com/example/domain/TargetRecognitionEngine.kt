@@ -62,6 +62,18 @@ object ImageFit {
             (canvasHeight - shownHeight) / 2f + normalized.y * shownHeight
         )
     }
+
+    /** Inverse of [toCanvas]: canvas point to photo-normalized coordinates. */
+    fun toImage(canvasPoint: Offset, canvasWidth: Float, canvasHeight: Float, imageAspectRatio: Float): Offset {
+        if (canvasWidth <= 0f || canvasHeight <= 0f) return Offset(0.5f, 0.5f)
+        if (imageAspectRatio <= 0f) return Offset(canvasPoint.x / canvasWidth, canvasPoint.y / canvasHeight)
+        val shownWidth = displayedWidth(canvasWidth, canvasHeight, imageAspectRatio)
+        val shownHeight = shownWidth / imageAspectRatio
+        return Offset(
+            (canvasPoint.x - (canvasWidth - shownWidth) / 2f) / shownWidth,
+            (canvasPoint.y - (canvasHeight - shownHeight) / 2f) / shownHeight
+        )
+    }
 }
 
 object TargetRecognitionEngine {
@@ -73,116 +85,15 @@ object TargetRecognitionEngine {
     suspend fun detectImpacts(
         context: Context,
         imageUri: Uri,
-        detectedTarget: TargetDetectionResult
+        params: ImpactDetectionParams
     ): List<Offset> = withContext(Dispatchers.Default) {
         try {
-            // Load a reasonably sized bitmap to detect bullet holes
             val image = loadLuma(context, imageUri, reqSize = 800) ?: return@withContext emptyList()
-            findImpactBlobs(
-                image = image,
-                centerNormalized = detectedTarget.detectedCenterNormalized,
-                blackRadiusNormalized = detectedTarget.detectedBlackRadiusNormalized
-            )
+            ImpactDetector.detect(image, params)
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
         }
-    }
-
-    /**
-     * Connected-components search for hole-sized blobs: dark spots on the white paper, or bright
-     * spots (light shining through) inside the black visual.
-     */
-    internal fun findImpactBlobs(
-        image: LumaImage,
-        centerNormalized: Offset,
-        blackRadiusNormalized: Float
-    ): List<Offset> {
-        val width = image.width
-        val height = image.height
-        if (width < 100 || height < 100) return emptyList()
-        val luma = image.luma
-
-        val targetCenterX = (centerNormalized.x * width).toInt()
-        val targetCenterY = (centerNormalized.y * height).toInt()
-        val targetRadiusPx = blackRadiusNormalized * width
-        val targetRadiusSq = targetRadiusPx * targetRadiusPx
-
-        val range = image.maxLuma - image.minLuma
-        val darkThreshold = image.minLuma + range * 0.45f
-        val brightThreshold = image.minLuma + range * 0.75f
-
-        // Approx size of a bullet hole relative to image width
-        val expectedHoleRadiusPx = width * 0.015f
-        val minBlobSize = (Math.PI * (expectedHoleRadiusPx * 0.4f) * (expectedHoleRadiusPx * 0.4f)).toInt()
-        val maxBlobSize = (Math.PI * (expectedHoleRadiusPx * 2.5f) * (expectedHoleRadiusPx * 2.5f)).toInt()
-
-        val visited = BooleanArray(width * height)
-        // Every pixel is enqueued at most once over the whole scan, so one reusable buffer of
-        // pixel indices is enough for all flood fills.
-        val queue = IntArray(width * height)
-        val impacts = ArrayList<Offset>()
-
-        for (y in 5 until height - 5) {
-            val rowOffset = y * width
-            val dyCenter = (y - targetCenterY).toFloat()
-            for (x in 5 until width - 5) {
-                val idx = rowOffset + x
-                if (visited[idx]) continue
-                visited[idx] = true
-
-                val dxCenter = (x - targetCenterX).toFloat()
-                val insideBlackVisual = dxCenter * dxCenter + dyCenter * dyCenter < targetRadiusSq
-                val seedLuma = luma[idx]
-                val isHoleCandidate = if (insideBlackVisual) seedLuma > brightThreshold else seedLuma < darkThreshold
-                if (!isHoleCandidate) continue
-
-                // Flood fill the whole blob. Oversized blobs (shadows, the visual itself, borders)
-                // are consumed entirely so that their leftovers are never mistaken for holes.
-                var head = 0
-                var tail = 0
-                queue[tail++] = idx
-                var sumX = 0L
-                var sumY = 0L
-
-                while (head < tail) {
-                    val p = queue[head++]
-                    val px = p % width
-                    val py = p / width
-                    sumX += px
-                    sumY += py
-
-                    val yStart = if (py > 0) py - 1 else 0
-                    val yEnd = if (py < height - 1) py + 1 else py
-                    val xStart = if (px > 0) px - 1 else 0
-                    val xEnd = if (px < width - 1) px + 1 else px
-                    for (ny in yStart..yEnd) {
-                        val nRow = ny * width
-                        for (nx in xStart..xEnd) {
-                            val nIdx = nRow + nx
-                            if (visited[nIdx]) continue
-                            val nLuma = luma[nIdx]
-                            val matches = if (insideBlackVisual) nLuma > brightThreshold else nLuma < darkThreshold
-                            if (matches) {
-                                visited[nIdx] = true
-                                queue[tail++] = nIdx
-                            }
-                        }
-                    }
-                }
-
-                val blobSize = tail
-                if (blobSize in minBlobSize..maxBlobSize) {
-                    impacts.add(
-                        Offset(
-                            (sumX.toDouble() / blobSize / width).toFloat(),
-                            (sumY.toDouble() / blobSize / height).toFloat()
-                        )
-                    )
-                }
-            }
-        }
-        return impacts
     }
 
     suspend fun analyzeImage(context: Context, imageUri: Uri): TargetDetectionResult = withContext(Dispatchers.Default) {

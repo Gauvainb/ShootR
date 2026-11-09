@@ -2,7 +2,6 @@ package com.example.domain
 
 import androidx.compose.ui.geometry.Offset
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.hypot
 
@@ -22,77 +21,7 @@ class TargetRecognitionEngineTest {
         }
     }
 
-    private fun FloatArray.rect(width: Int, left: Int, top: Int, right: Int, bottom: Int, value: Float) {
-        for (y in top until bottom) for (x in left until right) this[y * width + x] = value
-    }
-
     private fun image(width: Int, height: Int, luma: FloatArray) = LumaImage(width, height, luma, black, white)
-
-    private fun assertContainsPoint(points: List<Offset>, width: Int, height: Int, x: Int, y: Int) {
-        val found = points.any { hypot(it.x * width - x, it.y * height - y) <= 1.5f }
-        assertTrue("no impact detected near ($x, $y) in $points", found)
-    }
-
-    @Test
-    fun `finds dark holes on paper and bright holes inside the black visual`() {
-        val size = 800
-        val luma = blankImage(size, size)
-        luma.disc(size, 400, 400, 160, black)
-        val onPaper = listOf(100 to 120, 650 to 200, 300 to 700)
-        val inVisual = listOf(400 to 400, 350 to 460, 470 to 330)
-        onPaper.forEach { (x, y) -> luma.disc(size, x, y, 8, black) }
-        inVisual.forEach { (x, y) -> luma.disc(size, x, y, 8, white) }
-
-        val impacts = TargetRecognitionEngine.findImpactBlobs(
-            image = image(size, size, luma),
-            centerNormalized = Offset(0.5f, 0.5f),
-            blackRadiusNormalized = 160f / size
-        )
-
-        assertEquals(onPaper.size + inVisual.size, impacts.size)
-        (onPaper + inVisual).forEach { (x, y) -> assertContainsPoint(impacts, size, size, x, y) }
-    }
-
-    @Test
-    fun `large dark areas are never reported as impacts`() {
-        val size = 800
-        val luma = blankImage(size, size)
-        luma.disc(size, 400, 400, 160, black)
-        // A wedge-shaped shadow far larger than any bullet hole, plus one real hole. Abandoning the
-        // flood fill midway through such a shape used to leave hole-sized leftovers behind.
-        for (y in 560 until 790) {
-            luma.rect(size, left = 20, top = y, right = (20 + (y - 560) * 3).coerceAtMost(795), bottom = y + 1, value = black)
-        }
-        luma.disc(size, 650, 200, 8, black)
-
-        val impacts = TargetRecognitionEngine.findImpactBlobs(
-            image = image(size, size, luma),
-            centerNormalized = Offset(0.5f, 0.5f),
-            blackRadiusNormalized = 160f / size
-        )
-
-        assertEquals(1, impacts.size)
-        assertContainsPoint(impacts, size, size, 650, 200)
-    }
-
-    @Test
-    fun `hole coordinates are normalized per axis on non square photos`() {
-        val width = 800
-        val height = 600
-        val luma = blankImage(width, height)
-        luma.disc(width, 400, 300, 120, black)
-        luma.disc(width, 700, 90, 8, black)
-
-        val impacts = TargetRecognitionEngine.findImpactBlobs(
-            image = image(width, height, luma),
-            centerNormalized = Offset(0.5f, 0.5f),
-            blackRadiusNormalized = 120f / width
-        )
-
-        assertEquals(1, impacts.size)
-        assertEquals(700f / width, impacts[0].x, 0.002f)
-        assertEquals(90f / height, impacts[0].y, 0.002f)
-    }
 
     @Test
     fun `recognizes a C50 target and reports the photo geometry`() {
@@ -125,5 +54,12 @@ class TargetRecognitionEngineTest {
 
         // Square photo: identity scaling, as before.
         assertEquals(Offset(250f, 750f), ImageFit.toCanvas(Offset(0.25f, 0.75f), 1000f, 1000f, 1f))
+
+        // toImage is the inverse of toCanvas.
+        for (aspect in listOf(4f / 3f, 3f / 4f, 1f)) {
+            val back = ImageFit.toImage(ImageFit.toCanvas(Offset(0.3f, 0.8f), 1000f, 1000f, aspect), 1000f, 1000f, aspect)
+            assertEquals(0.3f, back.x, 0.0001f)
+            assertEquals(0.8f, back.y, 0.0001f)
+        }
     }
 }

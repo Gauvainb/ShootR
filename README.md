@@ -9,7 +9,7 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
 - **Pointage sur photo** : chargez la photo d'une cible, puis touchez ou glissez pour placer chaque impact. Zoom et déplacement à deux doigts.
 - **Calibration assistée** : placez le centre, puis ajustez un anneau sur un repère de diamètre connu (visuel noir C50 de 200 mm, carabine 10 m de 30,5 mm, pistolet 10 m de 59,5 mm, C200 de 400 mm, ou diamètre personnalisé) pour obtenir l'échelle en px/mm.
 - **Reconnaissance de cible** : analyse de la photo pour proposer le type de cible, la distance, le centre et l'échelle.
-- **Détection automatique des impacts** : recherche des trous sur la photo (sombres sur le papier, clairs dans le visuel noir).
+- **Détection automatique des impacts** : dès que la cible reconnue est appliquée, les trous sont recherchés sur la photo et placés. La taille attendue d'un trou est déduite du calibre et de l'échelle ; les impacts qui se chevauchent sont séparés, les cordons et chiffres imprimés sont ignorés. Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter impacts » relance la recherche sans dupliquer ceux déjà placés.
 - **Score automatique** selon le type de cible (C50, pistolet 10 m, carabine 10 m, C200), avec mouches (10X).
 - **Ajustement a posteriori** : pour chaque coup, correction des points, cordon ±1, recalage au millimètre, exclusion des « flyers », suppression.
 - **Télémétrie du groupement** : écart extrême (ES), hauteur, largeur, H+L, MOA et dérive du point moyen d'impact.
@@ -76,8 +76,10 @@ app/src/main/java/com/example/
 │   └── LocalJsonStore.kt           Lecture/écriture de l'historique et des armes
 ├── domain/
 │   ├── BallisticsCalculator.kt     ES, H, L, H+L, MOA, point moyen, clics de correction
+│   ├── ImpactDetector.kt           Détection des trous sur la photo
 │   ├── TargetCalibration.kt        Repères de calibration par type de cible
-│   └── TargetRecognitionEngine.kt  Reconnaissance de cible et détection d'impacts
+│   ├── TargetRecognitionEngine.kt  Reconnaissance de cible, décodage de la photo
+│   └── TargetSpecs.kt              Dimensions des cibles, diamètre des calibres
 └── ui/components/
     ├── CalibrationAssistantPanel.kt
     └── MoaProgressionChart.kt
@@ -98,6 +100,7 @@ Au premier lancement, quelques séances et armes d'exemple sont créées. Désin
 
 ## Limites connues
 
+- La détection automatique n'a été validée que sur des images de synthèse. Sur une vraie photo, elle peut manquer des impacts ou en proposer de faux (éclairage très inégal, cible froissée, pastilles) : le résultat est toujours à vérifier.
 - La photo d'une séance n'est pas copiée dans l'application : après un redémarrage, une séance rouverte peut ne plus afficher son image. Les impacts et les statistiques sont conservés.
 - La séance en cours de saisie n'est pas sauvegardée tant qu'on n'a pas appuyé sur « Enregistrer ».
 - L'affichage est verrouillé en portrait.
