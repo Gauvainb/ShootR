@@ -1,4 +1,4 @@
-name: Build Debug APK
+name: Build APKs
 
 on:
   push:
@@ -21,7 +21,6 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'gradle'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -48,12 +47,21 @@ jobs:
           fi
           chmod +x ./gradlew
 
-      - name: Build APK with Gradle
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+      - name: Build APKs with Gradle
+        run: ./gradlew assembleDebug assembleRelease --stacktrace --no-daemon
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # Minified (R8) build: much smaller and faster than the debug APK.
+      # Signed with the debug key unless an upload keystore is provided.
+      - name: Upload Optimized APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
