@@ -3,16 +3,18 @@ package com.example.domain
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
-import kotlin.math.hypot
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
+import kotlin.math.sin
 
 data class TargetDetectionResult(
     val targetType: String,
@@ -21,282 +23,294 @@ data class TargetDetectionResult(
     val visualDiameterMm: Float,
     val totalDiameterMm: Float,
     val detectedCenterNormalized: Offset, // Normalized center [0..1]
-    val detectedBlackRadiusNormalized: Float, // Normalized radius [0..1]
+    val detectedBlackRadiusNormalized: Float, // Normalized radius [0..1], relative to image width
     val detectedRatio: Float,
     val description: String,
-    val details: String
+    val details: String,
+    val imageAspectRatio: Float = 1f // width / height of the analyzed (upright) image
 )
+
+/**
+ * Luminance buffer of a decoded photo (one float per pixel, row-major), with its dynamic range.
+ */
+class LumaImage(
+    val width: Int,
+    val height: Int,
+    val luma: FloatArray,
+    val minLuma: Float,
+    val maxLuma: Float
+)
+
+/**
+ * Maps coordinates normalized to the photo ([0..1] on each axis) onto a canvas that displays the
+ * photo with `ContentScale.Fit` (centered, letterboxed when aspect ratios differ).
+ */
+object ImageFit {
+    fun displayedWidth(canvasWidth: Float, canvasHeight: Float, imageAspectRatio: Float): Float {
+        if (canvasWidth <= 0f || canvasHeight <= 0f || imageAspectRatio <= 0f) return canvasWidth
+        return min(canvasWidth, canvasHeight * imageAspectRatio)
+    }
+
+    fun toCanvas(normalized: Offset, canvasWidth: Float, canvasHeight: Float, imageAspectRatio: Float): Offset {
+        if (canvasWidth <= 0f || canvasHeight <= 0f || imageAspectRatio <= 0f) {
+            return Offset(normalized.x * canvasWidth, normalized.y * canvasHeight)
+        }
+        val shownWidth = displayedWidth(canvasWidth, canvasHeight, imageAspectRatio)
+        val shownHeight = shownWidth / imageAspectRatio
+        return Offset(
+            (canvasWidth - shownWidth) / 2f + normalized.x * shownWidth,
+            (canvasHeight - shownHeight) / 2f + normalized.y * shownHeight
+        )
+    }
+}
 
 object TargetRecognitionEngine {
 
-    suspend fun detectImpacts(context: Context, imageUri: Uri, detectedTarget: TargetDetectionResult): List<Impact> = withContext(Dispatchers.Default) {
-        val impactsList = mutableListOf<Impact>()
+    /**
+     * Detects bullet holes on the photo.
+     * @return hole centers normalized to the photo ([0..1], origin top-left, Y pointing down).
+     */
+    suspend fun detectImpacts(
+        context: Context,
+        imageUri: Uri,
+        detectedTarget: TargetDetectionResult
+    ): List<Offset> = withContext(Dispatchers.Default) {
         try {
             // Load a reasonably sized bitmap to detect bullet holes
-            val bitmap = decodeSampledBitmap(context, imageUri, reqWidth = 800, reqHeight = 800)
-                ?: return@withContext emptyList()
-
-            val width = bitmap.width
-            val height = bitmap.height
-            if (width < 100 || height < 100) return@withContext emptyList()
-
-            val pixels = IntArray(width * height)
-            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-            val luma = FloatArray(width * height)
-            var minLuma = 255f
-            var maxLuma = 0f
-
-            for (i in pixels.indices) {
-                val c = pixels[i]
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                val lum = 0.299f * r + 0.587f * g + 0.114f * b
-                luma[i] = lum
-                if (lum < minLuma) minLuma = lum
-                if (lum > maxLuma) maxLuma = lum
-            }
-
-            val targetCenterX = (detectedTarget.detectedCenterNormalized.x * width).toInt()
-            val targetCenterY = (detectedTarget.detectedCenterNormalized.y * height).toInt()
-            val targetRadiusPx = (detectedTarget.detectedBlackRadiusNormalized * width)
-
-            val darkThreshold = minLuma + (maxLuma - minLuma) * 0.45f
-            val brightThreshold = minLuma + (maxLuma - minLuma) * 0.75f
-
-            val visited = BooleanArray(width * height)
-
-            // Extremely simplified connected components for blobs (bullet holes)
-            val expectedHoleRadiusPx = width * 0.015f // Approx size of bullet hole relative to image width
-            val minBlobSize = (Math.PI * (expectedHoleRadiusPx * 0.4f) * (expectedHoleRadiusPx * 0.4f)).toInt()
-            val maxBlobSize = (Math.PI * (expectedHoleRadiusPx * 2.5f) * (expectedHoleRadiusPx * 2.5f)).toInt()
-
-            for (y in 5 until height - 5) {
-                for (x in 5 until width - 5) {
-                    val idx = y * width + x
-                    if (visited[idx]) continue
-
-                    val currentLuma = luma[idx]
-
-                    // A hole is usually a very dark spot on the white paper OR a bright spot (light shining through) on the black visual
-                    val distToCenter = hypot((x - targetCenterX).toFloat(), (y - targetCenterY).toFloat())
-                    val isInsideBlackVisual = distToCenter < targetRadiusPx
-
-                    val isHoleCandidate = if (isInsideBlackVisual) {
-                        currentLuma > brightThreshold // Light shining through dark paper
-                    } else {
-                        currentLuma < darkThreshold // Dark hole on white paper
-                    }
-
-                    if (isHoleCandidate) {
-                        // Flood fill to find blob
-                        val blobPixels = mutableListOf<Pair<Int, Int>>()
-                        val queue = mutableListOf(Pair(x, y))
-                        visited[idx] = true
-
-                        var qIdx = 0
-                        while (qIdx < queue.size) {
-                            val (cx, cy) = queue[qIdx++]
-                            blobPixels.add(Pair(cx, cy))
-
-                            // If blob gets insanely huge, it's not a bullet hole, stop exploring it completely
-                            if (blobPixels.size > maxBlobSize * 3) {
-                                break
-                            }
-
-                            // Check neighbors
-                            for (dy in -1..1) {
-                                for (dx in -1..1) {
-                                    if (dx == 0 && dy == 0) continue
-                                    val nx = cx + dx
-                                    val ny = cy + dy
-                                    if (nx in 0 until width && ny in 0 until height) {
-                                        val nIdx = ny * width + nx
-                                        if (!visited[nIdx]) {
-                                            val nLuma = luma[nIdx]
-                                            val nIsCandidate = if (isInsideBlackVisual) nLuma > brightThreshold else nLuma < darkThreshold
-                                            if (nIsCandidate) {
-                                                visited[nIdx] = true
-                                                queue.add(Pair(nx, ny))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // We only process complete blobs to avoid breaking large shadows into smaller hole-sized pieces
-                        if (qIdx == queue.size && blobPixels.size in minBlobSize..maxBlobSize) {
-                            // Calculate center of mass
-                            var sumX = 0.0
-                            var sumY = 0.0
-                            for (p in blobPixels) {
-                                sumX += p.first
-                                sumY += p.second
-                            }
-                            val cx = (sumX / blobPixels.size).toFloat()
-                            val cy = (sumY / blobPixels.size).toFloat()
-
-                            // Convert to normalized coordinates (0..1) then relative to center
-                            // X is positive to the right, Y is positive up
-                            val normX = cx / width
-                            val normY = cy / height
-
-                            val relNormX = normX - detectedTarget.detectedCenterNormalized.x
-                            val relNormY = detectedTarget.detectedCenterNormalized.y - normY
-
-                            impactsList.add(Impact(relNormX, relNormY))
-                        }
-                    } else {
-                        visited[idx] = true
-                    }
-                }
-            }
+            val image = loadLuma(context, imageUri, reqSize = 800) ?: return@withContext emptyList()
+            findImpactBlobs(
+                image = image,
+                centerNormalized = detectedTarget.detectedCenterNormalized,
+                blackRadiusNormalized = detectedTarget.detectedBlackRadiusNormalized
+            )
         } catch (e: Exception) {
             e.printStackTrace()
+            emptyList()
         }
-        impactsList
+    }
+
+    /**
+     * Connected-components search for hole-sized blobs: dark spots on the white paper, or bright
+     * spots (light shining through) inside the black visual.
+     */
+    internal fun findImpactBlobs(
+        image: LumaImage,
+        centerNormalized: Offset,
+        blackRadiusNormalized: Float
+    ): List<Offset> {
+        val width = image.width
+        val height = image.height
+        if (width < 100 || height < 100) return emptyList()
+        val luma = image.luma
+
+        val targetCenterX = (centerNormalized.x * width).toInt()
+        val targetCenterY = (centerNormalized.y * height).toInt()
+        val targetRadiusPx = blackRadiusNormalized * width
+        val targetRadiusSq = targetRadiusPx * targetRadiusPx
+
+        val range = image.maxLuma - image.minLuma
+        val darkThreshold = image.minLuma + range * 0.45f
+        val brightThreshold = image.minLuma + range * 0.75f
+
+        // Approx size of a bullet hole relative to image width
+        val expectedHoleRadiusPx = width * 0.015f
+        val minBlobSize = (Math.PI * (expectedHoleRadiusPx * 0.4f) * (expectedHoleRadiusPx * 0.4f)).toInt()
+        val maxBlobSize = (Math.PI * (expectedHoleRadiusPx * 2.5f) * (expectedHoleRadiusPx * 2.5f)).toInt()
+
+        val visited = BooleanArray(width * height)
+        // Every pixel is enqueued at most once over the whole scan, so one reusable buffer of
+        // pixel indices is enough for all flood fills.
+        val queue = IntArray(width * height)
+        val impacts = ArrayList<Offset>()
+
+        for (y in 5 until height - 5) {
+            val rowOffset = y * width
+            val dyCenter = (y - targetCenterY).toFloat()
+            for (x in 5 until width - 5) {
+                val idx = rowOffset + x
+                if (visited[idx]) continue
+                visited[idx] = true
+
+                val dxCenter = (x - targetCenterX).toFloat()
+                val insideBlackVisual = dxCenter * dxCenter + dyCenter * dyCenter < targetRadiusSq
+                val seedLuma = luma[idx]
+                val isHoleCandidate = if (insideBlackVisual) seedLuma > brightThreshold else seedLuma < darkThreshold
+                if (!isHoleCandidate) continue
+
+                // Flood fill the whole blob. Oversized blobs (shadows, the visual itself, borders)
+                // are consumed entirely so that their leftovers are never mistaken for holes.
+                var head = 0
+                var tail = 0
+                queue[tail++] = idx
+                var sumX = 0L
+                var sumY = 0L
+
+                while (head < tail) {
+                    val p = queue[head++]
+                    val px = p % width
+                    val py = p / width
+                    sumX += px
+                    sumY += py
+
+                    val yStart = if (py > 0) py - 1 else 0
+                    val yEnd = if (py < height - 1) py + 1 else py
+                    val xStart = if (px > 0) px - 1 else 0
+                    val xEnd = if (px < width - 1) px + 1 else px
+                    for (ny in yStart..yEnd) {
+                        val nRow = ny * width
+                        for (nx in xStart..xEnd) {
+                            val nIdx = nRow + nx
+                            if (visited[nIdx]) continue
+                            val nLuma = luma[nIdx]
+                            val matches = if (insideBlackVisual) nLuma > brightThreshold else nLuma < darkThreshold
+                            if (matches) {
+                                visited[nIdx] = true
+                                queue[tail++] = nIdx
+                            }
+                        }
+                    }
+                }
+
+                val blobSize = tail
+                if (blobSize in minBlobSize..maxBlobSize) {
+                    impacts.add(
+                        Offset(
+                            (sumX.toDouble() / blobSize / width).toFloat(),
+                            (sumY.toDouble() / blobSize / height).toFloat()
+                        )
+                    )
+                }
+            }
+        }
+        return impacts
     }
 
     suspend fun analyzeImage(context: Context, imageUri: Uri): TargetDetectionResult = withContext(Dispatchers.Default) {
         try {
-            val bitmap = decodeSampledBitmap(context, imageUri, reqWidth = 400, reqHeight = 400)
+            val image = loadLuma(context, imageUri, reqSize = 400)
                 ?: return@withContext fallbackDetection("Impossible de décoder l'image")
-
-            val width = bitmap.width
-            val height = bitmap.height
-            if (width < 50 || height < 50) {
-                return@withContext fallbackDetection("Image trop petite pour analyse")
-            }
-
-            // 1. Grayscale luminance buffer
-            val pixels = IntArray(width * height)
-            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-            val luma = FloatArray(width * height)
-            var minLuma = 255f
-            var maxLuma = 0f
-
-            for (i in pixels.indices) {
-                val c = pixels[i]
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                val lum = 0.299f * r + 0.587f * g + 0.114f * b
-                luma[i] = lum
-                if (lum < minLuma) minLuma = lum
-                if (lum > maxLuma) maxLuma = lum
-            }
-
-            val dynamicRange = maxLuma - minLuma
-            if (dynamicRange < 30f) {
-                return@withContext fallbackDetection("Contraste insuffisant sur la photo")
-            }
-
-            // Adaptive threshold for the dark center visual
-            val darkThreshold = minLuma + dynamicRange * 0.35f
-
-            // 2. Find center of mass of dark pixels (bullseye / visuel noir)
-            var sumX = 0.0
-            var sumY = 0.0
-            var darkCount = 0
-
-            // Focus on inner 80% to avoid dark borders
-            val marginX = (width * 0.10f).toInt()
-            val marginY = (height * 0.10f).toInt()
-
-            for (y in marginY until height - marginY) {
-                val rowOffset = y * width
-                for (x in marginX until width - marginX) {
-                    if (luma[rowOffset + x] < darkThreshold) {
-                        sumX += x
-                        sumY += y
-                        darkCount++
-                    }
-                }
-            }
-
-            val totalEligible = (width - 2 * marginX) * (height - 2 * marginY)
-            val darkRatioTotal = darkCount.toFloat() / max(1, totalEligible)
-
-            if (darkCount < 100 || darkRatioTotal < 0.02f) {
-                return@withContext TargetDetectionResult(
-                    targetType = "IPSC Classic / Métallique",
-                    confidencePercent = 78,
-                    suggestedDistanceMeters = 25,
-                    visualDiameterMm = 300f,
-                    totalDiameterMm = 450f,
-                    detectedCenterNormalized = Offset(0.5f, 0.5f),
-                    detectedBlackRadiusNormalized = 0.25f,
-                    detectedRatio = 0.25f,
-                    description = "Aucun visuel noir circulaire prononcé. Profil compatible Silhouette / Cible IPSC.",
-                    details = "Zones A/C/D ou silhouette métallique sans centre noir ISSF."
-                )
-            }
-
-            val centerX = (sumX / darkCount).toFloat()
-            val centerY = (sumY / darkCount).toFloat()
-
-            // 3. Radial profile scan from center to estimate circular bullseye radius
-            val numRays = 16
-            val maxRayLen = min(width, height) * 0.45f
-            val step = 2f
-            var totalRadiusAcc = 0f
-            var validRays = 0
-
-            for (ray in 0 until numRays) {
-                val angle = (ray.toDouble() / numRays) * 2.0 * Math.PI
-                val cosA = Math.cos(angle)
-                val sinA = Math.sin(angle)
-
-                var rayRadius = 0f
-                var r = step
-                while (r < maxRayLen) {
-                    val px = (centerX + r * cosA).roundToInt()
-                    val py = (centerY + r * sinA).roundToInt()
-
-                    if (px !in 0 until width || py !in 0 until height) break
-
-                    val valAtPoint = luma[py * width + px]
-                    if (valAtPoint > darkThreshold) {
-                        rayRadius = r.toFloat()
-                        break
-                    }
-                    r += step
-                }
-
-                if (rayRadius > 10f) {
-                    totalRadiusAcc += rayRadius
-                    validRays++
-                }
-            }
-
-            val estimatedRadiusPx = if (validRays > 0) totalRadiusAcc / validRays else (min(width, height) * 0.18f)
-            val cardRadiusEstimatePx = min(width, height) * 0.45f
-            val radiusRatio = (estimatedRadiusPx / cardRadiusEstimatePx).coerceIn(0.1f, 0.95f)
-
-            // 4. Classify target type based on ratio and geometry
-            // C50 standard: black visual (7-10) is 200mm on 500mm => ratio ~ 0.40
-            // Carabine 10m ISSF: black visual (4-10) is 30.5mm on 45.5mm => ratio ~ 0.67
-            // Pistolet 10m ISSF: black visual (7-10) is 59.5mm on 170mm => ratio ~ 0.35
-            // C200 Carabine: black visual is 400mm on 800mm => ratio ~ 0.50
-            return@withContext classifyTarget(
-                radiusRatio = radiusRatio,
-                centerX = centerX / width,
-                centerY = centerY / height,
-                detectedRadiusNormalized = estimatedRadiusPx / width
-            )
+            analyzeLuma(image)
         } catch (e: Exception) {
             fallbackDetection("Erreur d'analyse : ${e.message}")
         }
+    }
+
+    internal fun analyzeLuma(image: LumaImage): TargetDetectionResult {
+        val width = image.width
+        val height = image.height
+        if (width < 50 || height < 50) {
+            return fallbackDetection("Image trop petite pour analyse")
+        }
+        val luma = image.luma
+        val aspectRatio = width.toFloat() / height
+
+        val dynamicRange = image.maxLuma - image.minLuma
+        if (dynamicRange < 30f) {
+            return fallbackDetection("Contraste insuffisant sur la photo")
+        }
+
+        // Adaptive threshold for the dark center visual
+        val darkThreshold = image.minLuma + dynamicRange * 0.35f
+
+        // Find center of mass of dark pixels (bullseye / visuel noir)
+        var sumX = 0L
+        var sumY = 0L
+        var darkCount = 0
+
+        // Focus on inner 80% to avoid dark borders
+        val marginX = (width * 0.10f).toInt()
+        val marginY = (height * 0.10f).toInt()
+
+        for (y in marginY until height - marginY) {
+            val rowOffset = y * width
+            for (x in marginX until width - marginX) {
+                if (luma[rowOffset + x] < darkThreshold) {
+                    sumX += x
+                    sumY += y
+                    darkCount++
+                }
+            }
+        }
+
+        val totalEligible = (width - 2 * marginX) * (height - 2 * marginY)
+        val darkRatioTotal = darkCount.toFloat() / max(1, totalEligible)
+
+        if (darkCount < 100 || darkRatioTotal < 0.02f) {
+            return TargetDetectionResult(
+                targetType = "IPSC Classic / Métallique",
+                confidencePercent = 78,
+                suggestedDistanceMeters = 25,
+                visualDiameterMm = 300f,
+                totalDiameterMm = 450f,
+                detectedCenterNormalized = Offset(0.5f, 0.5f),
+                detectedBlackRadiusNormalized = 0.25f,
+                detectedRatio = 0.25f,
+                description = "Aucun visuel noir circulaire prononcé. Profil compatible Silhouette / Cible IPSC.",
+                details = "Zones A/C/D ou silhouette métallique sans centre noir ISSF.",
+                imageAspectRatio = aspectRatio
+            )
+        }
+
+        val centerX = (sumX.toDouble() / darkCount).toFloat()
+        val centerY = (sumY.toDouble() / darkCount).toFloat()
+
+        // Radial profile scan from center to estimate circular bullseye radius
+        val numRays = 16
+        val maxRayLen = min(width, height) * 0.45f
+        val step = 2f
+        var totalRadiusAcc = 0f
+        var validRays = 0
+
+        for (ray in 0 until numRays) {
+            val angle = (ray.toDouble() / numRays) * 2.0 * Math.PI
+            val cosA = cos(angle)
+            val sinA = sin(angle)
+
+            var rayRadius = 0f
+            var r = step
+            while (r < maxRayLen) {
+                val px = (centerX + r * cosA).roundToInt()
+                val py = (centerY + r * sinA).roundToInt()
+
+                if (px !in 0 until width || py !in 0 until height) break
+
+                if (luma[py * width + px] > darkThreshold) {
+                    rayRadius = r
+                    break
+                }
+                r += step
+            }
+
+            if (rayRadius > 10f) {
+                totalRadiusAcc += rayRadius
+                validRays++
+            }
+        }
+
+        val estimatedRadiusPx = if (validRays > 0) totalRadiusAcc / validRays else (min(width, height) * 0.18f)
+        val cardRadiusEstimatePx = min(width, height) * 0.45f
+        val radiusRatio = (estimatedRadiusPx / cardRadiusEstimatePx).coerceIn(0.1f, 0.95f)
+
+        // Classify target type based on ratio and geometry
+        // C50 standard: black visual (7-10) is 200mm on 500mm => ratio ~ 0.40
+        // Carabine 10m ISSF: black visual (4-10) is 30.5mm on 45.5mm => ratio ~ 0.67
+        // Pistolet 10m ISSF: black visual (7-10) is 59.5mm on 170mm => ratio ~ 0.35
+        // C200 Carabine: black visual is 400mm on 800mm => ratio ~ 0.50
+        return classifyTarget(
+            radiusRatio = radiusRatio,
+            centerX = centerX / width,
+            centerY = centerY / height,
+            detectedRadiusNormalized = estimatedRadiusPx / width,
+            imageAspectRatio = aspectRatio
+        )
     }
 
     private fun classifyTarget(
         radiusRatio: Float,
         centerX: Float,
         centerY: Float,
-        detectedRadiusNormalized: Float
+        detectedRadiusNormalized: Float,
+        imageAspectRatio: Float
     ): TargetDetectionResult {
         return when {
             // Carabine 10m ISSF : Very large black bullseye relative to target card (~67%)
@@ -312,7 +326,8 @@ object TargetRecognitionEngine {
                     detectedBlackRadiusNormalized = detectedRadiusNormalized,
                     detectedRatio = radiusRatio,
                     description = "Cible Carabine 10m ISSF reconnue (visuel noir 30.5 mm couvrant les zones 4 à 10).",
-                    details = "Visuel central dominant (${(radiusRatio * 100).roundToInt()}% du carton). Échelle micro-cible calibrée."
+                    details = "Visuel central dominant (${(radiusRatio * 100).roundToInt()}% du carton). Échelle micro-cible calibrée.",
+                    imageAspectRatio = imageAspectRatio
                 )
             }
             // C200 (Carabine 200m / 300m) : Black visual covers ~50%
@@ -328,7 +343,8 @@ object TargetRecognitionEngine {
                     detectedBlackRadiusNormalized = detectedRadiusNormalized,
                     detectedRatio = radiusRatio,
                     description = "Cible C200 Longue Distance reconnue (visuel noir 400 mm).",
-                    details = "Format grand carton 80x80 cm, centre noir du 6 au 10. Distance conseillée : 200m ou 300m."
+                    details = "Format grand carton 80x80 cm, centre noir du 6 au 10. Distance conseillée : 200m ou 300m.",
+                    imageAspectRatio = imageAspectRatio
                 )
             }
             // C50 (Pistolet 25m / Carabine 50m) : Golden standard French/European target, ratio ~0.40
@@ -344,7 +360,8 @@ object TargetRecognitionEngine {
                     detectedBlackRadiusNormalized = detectedRadiusNormalized,
                     detectedRatio = radiusRatio,
                     description = "Cible C50 standard reconnue (visuel noir de 200 mm du 7 au 10).",
-                    details = "Format officiel FFTir 50x50 cm pour pistolet 25m et carabine 50m. Ratio noir/blanc conforme à 40%."
+                    details = "Format officiel FFTir 50x50 cm pour pistolet 25m et carabine 50m. Ratio noir/blanc conforme à 40%.",
+                    imageAspectRatio = imageAspectRatio
                 )
             }
             // Pistolet 10m (ISSF) : Black visual ratio ~0.35 (59.5mm / 170mm)
@@ -360,7 +377,8 @@ object TargetRecognitionEngine {
                     detectedBlackRadiusNormalized = detectedRadiusNormalized,
                     detectedRatio = radiusRatio,
                     description = "Cible Pistolet 10m Air Comprimé ISSF reconnue (visuel noir 59.5 mm).",
-                    details = "Carton standard 17x17 cm, visuel noir du 7 au 10. Distance 10 mètres."
+                    details = "Carton standard 17x17 cm, visuel noir du 7 au 10. Distance 10 mètres.",
+                    imageAspectRatio = imageAspectRatio
                 )
             }
             // Small visual or multiple spots => Cible Hunter ou Benchrest
@@ -375,7 +393,8 @@ object TargetRecognitionEngine {
                     detectedBlackRadiusNormalized = detectedRadiusNormalized,
                     detectedRatio = radiusRatio,
                     description = "Cible à petit visuel de précision / Benchrest ou Hunter.",
-                    details = "Visuel compact (${(radiusRatio * 100).roundToInt()}% du champ). Centrage automatique calculé."
+                    details = "Visuel compact (${(radiusRatio * 100).roundToInt()}% du champ). Centrage automatique calculé.",
+                    imageAspectRatio = imageAspectRatio
                 )
             }
         }
@@ -394,6 +413,34 @@ object TargetRecognitionEngine {
             description = "Détection par défaut : Cible standard C50 (25m / 50m).",
             details = reason
         )
+    }
+
+    /** Decodes a downsampled, upright copy of the photo and converts it to a luminance buffer. */
+    private fun loadLuma(context: Context, uri: Uri, reqSize: Int): LumaImage? {
+        val bitmap = decodeSampledBitmap(context, uri, reqSize, reqSize) ?: return null
+        try {
+            val width = bitmap.width
+            val height = bitmap.height
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            val luma = FloatArray(width * height)
+            var minLuma = 255f
+            var maxLuma = 0f
+            for (i in pixels.indices) {
+                val c = pixels[i]
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                val lum = 0.299f * r + 0.587f * g + 0.114f * b
+                luma[i] = lum
+                if (lum < minLuma) minLuma = lum
+                if (lum > maxLuma) maxLuma = lum
+            }
+            return LumaImage(width, height, luma, minLuma, maxLuma)
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun decodeSampledBitmap(context: Context, uri: Uri, reqWidth: Int, reqHeight: Int): Bitmap? {
@@ -416,11 +463,49 @@ object TargetRecognitionEngine {
 
             options.inJustDecodeBounds = false
             options.inSampleSize = inSampleSize
-            context.contentResolver.openInputStream(uri)?.use { stream ->
+            val decoded = context.contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, options)
-            }
+            } ?: return null
+
+            applyExifOrientation(context, uri, decoded)
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * The photo is displayed upright (the image loader honors EXIF), so the analysis must run on
+     * the same orientation or detected coordinates would not match what the user sees.
+     */
+    private fun applyExifOrientation(context: Context, uri: Uri, bitmap: Bitmap): Bitmap {
+        val orientation = try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+            else -> return bitmap
+        }
+
+        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (rotated !== bitmap) bitmap.recycle()
+        return rotated
     }
 }

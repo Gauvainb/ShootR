@@ -141,6 +141,8 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.domain.BallisticsCalculator
 import com.example.domain.CalibrationReference
+import com.example.data.LocalJsonStore
+import com.example.domain.ImageFit
 import com.example.domain.Impact
 import com.example.domain.TargetCalibrationDefaults
 import com.example.domain.TargetDetectionResult
@@ -153,7 +155,6 @@ import com.example.ui.components.SessionChartData
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -223,7 +224,14 @@ class MainActivity : ComponentActivity() {
 fun TirTrackerApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val textMeasurer = rememberTextMeasurer()
+    // One cached layout per impact number: the default cache (8 entries) thrashes on every frame
+    // as soon as more impacts than that are drawn.
+    val textMeasurer = rememberTextMeasurer(cacheSize = 64)
+    val impactNumberStyle = remember { TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black) }
+    val calibrationLabelStyle = remember { TextStyle(color = Color(0xFFFBBF24), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+    val calibrationRingDash = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f) }
+    val calibrationRadiusDash = remember { PathEffect.dashPathEffect(floatArrayOf(6f, 4f), 0f) }
+    val groupCircleDash = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f) }
 
     var currentTab by remember { mutableStateOf(AppTab.SHOOTING_RANGE) }
 
@@ -277,65 +285,8 @@ fun TirTrackerApp() {
     var showWeaponsDialog by remember { mutableStateOf(false) }
     var showAddWeaponDialog by remember { mutableStateOf(false) }
 
-    fun loadWeapons(): List<Weapon> {
-        return try {
-            val file = File(context.filesDir, "weapons_library.json")
-            if (!file.exists()) {
-                listOf(
-                    Weapon(1L, "CZ 457 Varmint", "Carabine", ".22 LR", "Lunette Vortex 4-12x40"),
-                    Weapon(2L, "Glock 17 Gen 5", "Pistolet", "9x19 mm", "Visée d'origine 3 points"),
-                    Weapon(3L, "AR-15 DDM4 V7", "Fusil d'assaut", "5.56x45 mm / .223 Rem", "Point rouge EOTech EXPS2"),
-                    Weapon(4L, "Tikka T3x TAC A1", "Fusil de précision", ".308 Win", "Lunette Schmidt & Bender 5-25x56"),
-                    Weapon(5L, "Smith & Wesson 686", "Revolver", ".357 Magnum", "Hausse réglable")
-                )
-            } else {
-                val array = JSONArray(file.readText())
-                val list = mutableListOf<Weapon>()
-                for (i in 0 until array.length()) {
-                    val obj = array.getJSONObject(i)
-                    list.add(
-                        Weapon(
-                            id = obj.optLong("id", System.currentTimeMillis()),
-                            name = obj.optString("name", "Arme"),
-                            type = obj.optString("type", "Pistolet"),
-                            caliber = obj.optString("caliber", "9x19 mm"),
-                            optics = obj.optString("optics", ""),
-                            notes = obj.optString("notes", "")
-                        )
-                    )
-                }
-                list
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    fun saveWeapons(list: List<Weapon>) {
-        try {
-            val file = File(context.filesDir, "weapons_library.json")
-            val array = JSONArray()
-            list.forEach { w ->
-                val obj = JSONObject()
-                obj.put("id", w.id)
-                obj.put("name", w.name)
-                obj.put("type", w.type)
-                obj.put("caliber", w.caliber)
-                obj.put("optics", w.optics)
-                obj.put("notes", w.notes)
-                array.put(obj)
-            }
-            file.writeText(array.toString(2))
-        } catch (_: Exception) {}
-    }
-
-    remember {
-        val loaded = loadWeapons()
-        weaponsList.addAll(loaded)
-        if (!File(context.filesDir, "weapons_library.json").exists()) {
-            saveWeapons(loaded)
-        }
-        true
+    LaunchedEffect(Unit) {
+        weaponsList.addAll(0, LocalJsonStore.loadWeapons(context))
     }
 
     // 4. Canvas interaction state
@@ -449,94 +400,20 @@ fun TirTrackerApp() {
     var chartWeaponFilter by remember { mutableStateOf("Toutes") }
     var chartDisplayType by remember { mutableStateOf(ChartDisplayType.LINE) }
 
-    fun loadHistory(): List<JSONObject> {
-        return try {
-            val file = File(context.filesDir, "sessions_history.json")
-            if (!file.exists()) {
-                val sampleArray = JSONArray()
-                val now = System.currentTimeMillis()
-                val samples = listOf(
-                    Triple(now - 86400000L * 4, 1.45f, 21.1f),
-                    Triple(now - 86400000L * 3, 1.20f, 17.5f),
-                    Triple(now - 86400000L * 2, 0.95f, 13.8f),
-                    Triple(now - 86400000L * 1, 0.82f, 11.9f)
-                )
-                samples.forEachIndexed { _, (time, moaVal, esVal) ->
-                    val obj = JSONObject()
-                    obj.put("id", time)
-                    obj.put("title", "Entraînement Précision 50m")
-                    obj.put("date", SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRANCE).format(Date(time)))
-                    obj.put("weapon", "CZ 457 Varmint")
-                    obj.put("caliber", ".22 LR")
-                    obj.put("targetType", "C50 (25m/50m)")
-                    obj.put("distanceMeters", 50.0)
-                    obj.put("ammo", "SK Rifle Match 40gr")
-                    obj.put("notes", "Bon groupement serré, météo calme.")
-                    obj.put("shotsCount", 5)
-                    obj.put("totalScore", 48)
-                    obj.put("innerTens", 2)
-                    obj.put("esMm", esVal.toDouble())
-                    obj.put("hMm", (esVal * 0.8).toDouble())
-                    obj.put("lMm", (esVal * 0.7).toDouble())
-                    obj.put("hPlusL", (esVal * 1.5).toDouble())
-                    obj.put("moa", moaVal.toDouble())
-                    obj.put("mpiDeltaXMm", 1.2)
-                    obj.put("mpiDeltaYMm", -0.8)
-
-                    val imps = JSONArray()
-                    val offsets = listOf(
-                        Pair(5.0, 4.0),
-                        Pair(-4.0, 6.0),
-                        Pair(2.0, -3.0),
-                        Pair(8.0, 10.0),
-                        Pair(-6.0, -5.0)
-                    )
-                    offsets.forEachIndexed { i, (x, y) ->
-                        val impObj = JSONObject()
-                        impObj.put("index", i + 1)
-                        impObj.put("xMm", x)
-                        impObj.put("yMm", y)
-                        impObj.put("score", if (i < 3) 10 else 9)
-                        impObj.put("isInnerTen", i == 0 || i == 2)
-                        imps.put(impObj)
-                    }
-                    obj.put("impacts", imps)
-                    sampleArray.put(obj)
-                }
-                file.writeText(sampleArray.toString(2))
-                val list = mutableListOf<JSONObject>()
-                for (i in 0 until sampleArray.length()) list.add(sampleArray.getJSONObject(i))
-                list.reversed()
-            } else {
-                val array = JSONArray(file.readText())
-                val list = mutableListOf<JSONObject>()
-                for (i in 0 until array.length()) {
-                    list.add(array.getJSONObject(i))
-                }
-                list.reversed()
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
+    // The in-memory list is the source of truth; the file is read once and written in the background.
+    var historyLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        savedSessionsList = LocalJsonStore.loadSessions(context)
+        historyLoaded = true
     }
 
     fun saveHistory(list: List<JSONObject>) {
-        try {
-            val file = File(context.filesDir, "sessions_history.json")
-            val array = JSONArray()
-            list.forEach { array.put(it) }
-            file.writeText(array.toString(2))
-            savedSessionsList = list
-        } catch (_: Exception) {}
-    }
-
-    remember {
-        savedSessionsList = loadHistory()
-        true
+        savedSessionsList = list
+        LocalJsonStore.saveSessions(context, list)
     }
 
     // Ballistics stats based on impacts (ignoring flyers)
-    val currentStats by remember(impactsList.size, distanceMeters, pixelPerMm, targetCenterPx) {
+    val currentStats by remember(distanceMeters) {
         derivedStateOf {
             val activeImpacts = impactsList.filter { !it.isFlyer }.map { it.realMm }
             BallisticsCalculator.calculateStats(
@@ -547,11 +424,18 @@ fun TirTrackerApp() {
         }
     }
 
-    val totalScore = remember(impactsList.size) {
-        derivedStateOf { impactsList.sumOf { it.score } }
-    }
-    val innerTensCount = remember(impactsList.size) {
-        derivedStateOf { impactsList.count { it.isInnerTen } }
+    val totalScore = remember { derivedStateOf { impactsList.sumOf { it.score } } }
+    val innerTensCount = remember { derivedStateOf { impactsList.count { it.isInnerTen } } }
+
+    // Recomputes real-world coordinates and scores of every impact after the center or scale moved.
+    fun recomputeImpacts(center: Offset, pxMm: Float) {
+        if (impactsList.isEmpty() || pxMm <= 0f) return
+        for (i in impactsList.indices) {
+            val imp = impactsList[i]
+            val realMm = Impact((imp.canvasOffset.x - center.x) / pxMm, (center.y - imp.canvasOffset.y) / pxMm)
+            val (sc, inner) = computeScoreForImpact(realMm, targetTypeInput)
+            impactsList[i] = imp.copy(realMm = realMm, score = sc, isInnerTen = inner)
+        }
     }
 
     // Function to load a past session into the active editor
@@ -615,9 +499,10 @@ fun TirTrackerApp() {
             return
         }
 
+        if (!historyLoaded) return
+
         try {
-            val file = File(context.filesDir, "sessions_history.json")
-            val currentList = loadHistory().toMutableList()
+            val currentList = savedSessionsList.toMutableList()
 
             val timestamp = editingSessionId ?: System.currentTimeMillis()
             val sessionObj = JSONObject()
@@ -741,15 +626,18 @@ fun TirTrackerApp() {
                         distanceInput = result.suggestedDistanceMeters.toString()
 
                         // Automatically center the reticle on the detected center
-                        val normCenter = result.detectedCenterNormalized
-                        targetCenterPx = Offset(canvasWidthPx * normCenter.x, canvasHeightPx * normCenter.y)
+                        val detectedCenter = ImageFit.toCanvas(
+                            result.detectedCenterNormalized, canvasWidthPx, canvasHeightPx, result.imageAspectRatio
+                        )
+                        targetCenterPx = detectedCenter
 
                         // Estimate pixelPerMm based on detected visual diameter
                         if (result.detectedBlackRadiusNormalized > 0.02f && result.visualDiameterMm > 0f) {
-                            val estimatedVisualPixels = (result.detectedBlackRadiusNormalized * 2f) * canvasWidthPx
+                            val shownImageWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, result.imageAspectRatio)
+                            val estimatedVisualPixels = (result.detectedBlackRadiusNormalized * 2f) * shownImageWidthPx
                             pixelPerMm = estimatedVisualPixels / result.visualDiameterMm
                             val rPx = estimatedVisualPixels / 2f
-                            calibrationEdgePx = Offset(targetCenterPx!!.x + rPx, targetCenterPx!!.y)
+                            calibrationEdgePx = Offset(detectedCenter.x + rPx, detectedCenter.y)
                             calibrationStep = CalibrationStep.CALIBRATED
                         }
 
@@ -1102,10 +990,7 @@ fun TirTrackerApp() {
                 )
                 NavigationBarItem(
                     selected = currentTab == AppTab.HISTORY,
-                    onClick = {
-                        savedSessionsList = loadHistory()
-                        currentTab = AppTab.HISTORY
-                    },
+                    onClick = { currentTab = AppTab.HISTORY },
                     icon = {
                         BadgedBox(
                             badge = {
@@ -1332,7 +1217,7 @@ fun TirTrackerApp() {
                     }
 
                     // Panneau d'assistance guidé à la calibration du visuel
-                    if (activeMode == AnnotationMode.CALIBRATE) {
+                    if (activeMode == AnnotationMode.CALIBRATE) RecomposeScope {
                         CalibrationAssistantPanel(
                             selectedReference = selectedCalibrationRef,
                             onSelectReference = { ref ->
@@ -1402,29 +1287,26 @@ fun TirTrackerApp() {
 
                                 OutlinedButton(
                                     onClick = {
-                                        if (selectedImageUri == null) return@OutlinedButton
+                                        val imageUri = selectedImageUri ?: return@OutlinedButton
 
                                         coroutineScope.launch {
                                             val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
                                             val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
 
                                             // Make sure we have detectedTargetResult. If not we could analyze image first
-                                            val targetRes = detectedTargetResult ?: TargetRecognitionEngine.analyzeImage(context, selectedImageUri!!)
+                                            val targetRes = detectedTargetResult ?: TargetRecognitionEngine.analyzeImage(context, imageUri)
 
-                                            val newImpacts = TargetRecognitionEngine.detectImpacts(context, selectedImageUri!!, targetRes)
+                                            val newImpacts = TargetRecognitionEngine.detectImpacts(context, imageUri, targetRes)
 
-                                            // The algorithm returns impacts in normalized coordinates relative to center (0..1 scale)
-                                            // X is positive to right, Y is positive to top
-                                            val mappedImpacts = newImpacts.mapIndexed { idx, relNormImp ->
-                                                val normX = relNormImp.xMm + targetRes.detectedCenterNormalized.x
-                                                val normY = targetRes.detectedCenterNormalized.y - relNormImp.yMm
+                                            // The algorithm returns hole centers normalized to the photo (0..1),
+                                            // which is letterboxed inside the square canvas.
+                                            val mappedImpacts = newImpacts.mapIndexed { idx, normalized ->
+                                                val canvasOffset = ImageFit.toCanvas(
+                                                    normalized, canvasWidthPx, canvasHeightPx, targetRes.imageAspectRatio
+                                                )
 
-                                                val canvasX = normX * canvasWidthPx
-                                                val canvasY = normY * canvasHeightPx
-                                                val canvasOffset = Offset(canvasX, canvasY)
-
-                                                val relXMm = (canvasX - center.x) / pxMm
-                                                val relYMm = (center.y - canvasY) / pxMm
+                                                val relXMm = (canvasOffset.x - center.x) / pxMm
+                                                val relYMm = (center.y - canvasOffset.y) / pxMm
                                                 val realImp = Impact(relXMm, relYMm)
 
                                                 val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
@@ -1601,16 +1483,7 @@ fun TirTrackerApp() {
                                                         dragHudText = "🎯 Centre : (${currentLocalPoint.x.toInt()}, ${currentLocalPoint.y.toInt()})"
 
                                                         // Recalcul en temps réel des coordonnées réelles des impacts
-                                                        if (pixelPerMm > 0f) {
-                                                            val updated = impactsList.map { imp ->
-                                                                val xMm = (imp.canvasOffset.x - currentLocalPoint.x) / pixelPerMm
-                                                                val yMm = (currentLocalPoint.y - imp.canvasOffset.y) / pixelPerMm
-                                                                val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
-                                                                imp.copy(realMm = Impact(xMm, yMm), score = sc, isInnerTen = inner)
-                                                            }
-                                                            impactsList.clear()
-                                                            impactsList.addAll(updated)
-                                                        }
+                                                        recomputeImpacts(currentLocalPoint, pixelPerMm)
                                                     } else {
                                                         // Ajustement dynamique du diamètre du visuel en gardant le doigt appuyé
                                                         val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
@@ -1623,14 +1496,7 @@ fun TirTrackerApp() {
                                                             dragHudText = "📏 Visuel ${selectedCalibrationRef.diameterMm.toInt()} mm (${String.format(Locale.US, "%.2f", pixelPerMm)} px/mm)"
 
                                                             // Recalcul en temps réel de tous les impacts avec la nouvelle échelle
-                                                            val updated = impactsList.map { imp ->
-                                                                val xMm = (imp.canvasOffset.x - center.x) / pixelPerMm
-                                                                val yMm = (center.y - imp.canvasOffset.y) / pixelPerMm
-                                                                val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
-                                                                imp.copy(realMm = Impact(xMm, yMm), score = sc, isInnerTen = inner)
-                                                            }
-                                                            impactsList.clear()
-                                                            impactsList.addAll(updated)
+                                                            recomputeImpacts(center, pixelPerMm)
                                                         }
                                                     }
                                                     change.consume()
@@ -1638,15 +1504,7 @@ fun TirTrackerApp() {
                                                 AnnotationMode.TARGET_CENTER -> {
                                                     targetCenterPx = currentLocalPoint
                                                     dragHudText = "🎯 Centre : (${currentLocalPoint.x.toInt()}, ${currentLocalPoint.y.toInt()})"
-                                                    val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                                                    val updated = impactsList.map { imp ->
-                                                        val xMm = (imp.canvasOffset.x - currentLocalPoint.x) / pxMm
-                                                        val yMm = (currentLocalPoint.y - imp.canvasOffset.y) / pxMm
-                                                        val (sc, inner) = computeScoreForImpact(Impact(xMm, yMm), targetTypeInput)
-                                                        imp.copy(realMm = Impact(xMm, yMm), score = sc, isInnerTen = inner)
-                                                    }
-                                                    impactsList.clear()
-                                                    impactsList.addAll(updated)
+                                                    recomputeImpacts(currentLocalPoint, if (pixelPerMm > 0f) pixelPerMm else 4f)
                                                     change.consume()
                                                 }
                                                 AnnotationMode.IMPACT -> {
@@ -1769,6 +1627,12 @@ fun TirTrackerApp() {
                             }
                         }
 
+                        val imageRequest = remember(selectedImageUri) {
+                            selectedImageUri?.let { ImageRequest.Builder(context).data(it).crossfade(true).build() }
+                        }
+                        // Only the boolean is observed here, so pinch-zoom frames do not recompose the canvas content.
+                        val isZoomed by remember { derivedStateOf { scale > 1.05f || offset != Offset.Zero } }
+
                         // CONTENEUR TRANSFORMÉ UNIQUE : La photo et le canvas partagent exactement le même espace de coordonnées
                         Box(
                             modifier = Modifier
@@ -1781,9 +1645,9 @@ fun TirTrackerApp() {
                                     transformOrigin = TransformOrigin(0f, 0f)
                                 }
                         ) {
-                            if (selectedImageUri != null) {
+                            if (imageRequest != null) {
                                 AsyncImage(
-                                    model = ImageRequest.Builder(context).data(selectedImageUri).crossfade(true).build(),
+                                    model = imageRequest,
                                     contentDescription = "Cible de tir",
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
@@ -1827,10 +1691,7 @@ fun TirTrackerApp() {
                                             color = Color(0xFFFBBF24),
                                             radius = visualRadiusPx,
                                             center = center,
-                                            style = Stroke(
-                                                width = 3f,
-                                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f)
-                                            )
+                                            style = Stroke(width = 3f, pathEffect = calibrationRingDash)
                                         )
 
                                         // Poignée d'ajustement sur le bord du visuel
@@ -1844,18 +1705,11 @@ fun TirTrackerApp() {
                                             start = center,
                                             end = edgePoint,
                                             strokeWidth = 2f,
-                                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 4f), 0f)
+                                            pathEffect = calibrationRadiusDash
                                         )
 
                                         val label = "${selectedCalibrationRef.diameterMm.toInt()} mm (${selectedCalibrationRef.shortName})"
-                                        val textLayout = textMeasurer.measure(
-                                            label,
-                                            style = TextStyle(
-                                                color = Color(0xFFFBBF24),
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        )
+                                        val textLayout = textMeasurer.measure(label, style = calibrationLabelStyle)
                                         drawText(
                                             textLayoutResult = textLayout,
                                             topLeft = Offset(center.x - textLayout.size.width / 2f, center.y - visualRadiusPx - textLayout.size.height - 6f)
@@ -1892,7 +1746,7 @@ fun TirTrackerApp() {
                                         color = Color(0xFF38BDF8).copy(alpha = 0.65f),
                                         radius = maxRadius + 8f,
                                         center = mpiPos,
-                                        style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f))
+                                        style = Stroke(width = 2f, pathEffect = groupCircleDash)
                                     )
 
                                     val mpiArm = 18f
@@ -1929,7 +1783,7 @@ fun TirTrackerApp() {
 
                                     val numLayout = textMeasurer.measure(
                                         imp.index.toString(),
-                                        style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                        style = impactNumberStyle
                                     )
                                     drawText(
                                         textLayoutResult = numLayout,
@@ -1956,7 +1810,7 @@ fun TirTrackerApp() {
 
                                     val numLayout = textMeasurer.measure(
                                         newIdx.toString(),
-                                        style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                                        style = impactNumberStyle
                                     )
                                     drawText(
                                         textLayoutResult = numLayout,
@@ -2007,7 +1861,7 @@ fun TirTrackerApp() {
                         }
 
                         // BADGE INDICATEUR DE ZOOM EN BAS À DROITE
-                        if (scale > 1.05f || offset != Offset.Zero) {
+                        if (isZoomed) {
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.BottomEnd)
@@ -2197,6 +2051,7 @@ fun TirTrackerApp() {
                     // 7. BOUTON ENREGISTRER LA SÉANCE
                     Button(
                         onClick = { saveSession() },
+                        enabled = historyLoaded,
                         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("save_session_button"),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
@@ -2247,9 +2102,7 @@ fun TirTrackerApp() {
                             }
                             IconButton(
                                 onClick = {
-                                    val file = File(context.filesDir, "sessions_history.json")
-                                    if (file.exists()) file.delete()
-                                    savedSessionsList = emptyList()
+                                    saveHistory(emptyList())
                                     Toast.makeText(context, "Historique réinitialisé.", Toast.LENGTH_SHORT).show()
                                 }
                             ) {
@@ -2528,7 +2381,7 @@ fun TirTrackerApp() {
                                         IconButton(
                                             onClick = {
                                                 weaponsList.remove(weapon)
-                                                saveWeapons(weaponsList.toList())
+                                                LocalJsonStore.saveWeapons(context, weaponsList.toList())
                                             }
                                         ) {
                                             Icon(imageVector = Icons.Default.Delete, contentDescription = "Supprimer", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
@@ -2644,7 +2497,7 @@ fun TirTrackerApp() {
                                 optics = newOptics.trim()
                             )
                             weaponsList.add(newWeapon)
-                            saveWeapons(weaponsList.toList())
+                            LocalJsonStore.saveWeapons(context, weaponsList.toList())
                             showAddWeaponDialog = false
                             Toast.makeText(context, "Arme ajoutée au coffre !", Toast.LENGTH_SHORT).show()
                         } else {
@@ -2663,3 +2516,10 @@ fun TirTrackerApp() {
         )
     }
 }
+
+/**
+ * Gives [content] its own recomposition scope, so state read inside it does not invalidate the
+ * (inline) layouts of the caller.
+ */
+@Composable
+private fun RecomposeScope(content: @Composable () -> Unit) = content()
