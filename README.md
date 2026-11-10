@@ -12,7 +12,7 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
 - **Détection automatique des impacts** : dès que le repérage est appliqué, les impacts sont recherchés et placés.
   - Dans le noir, un impact est une tache plus claire que l'encre ; sur le blanc, une tache qui s'écarte de la couleur locale du papier ; sur une cible réactive, le halo jaune.
   - La taille d'un impact isolé est mesurée sur la photo elle-même, ce qui permet de séparer les impacts qui se chevauchent.
-  - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés.
+  - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés. Un impact qui touche un chiffre est conservé : un chiffre n'a que des traits fins, un impact a un cœur plein.
   - Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter impacts » relance la recherche sans dupliquer ceux déjà placés.
 - **Score automatique** selon le type de cible (C50, pistolet 10 m, carabine 10 m, C200), avec mouches (10X).
 - **Ajustement a posteriori** : pour chaque coup, correction des points, cordon ±1, recalage au millimètre, exclusion des « flyers », suppression.
@@ -113,7 +113,7 @@ Au premier lancement, quelques séances et armes d'exemple sont créées. Désin
 ## Limites connues
 
 - La détection automatique est réglée sur des photos de cibles C50 tirées au pistolet. Elle reste une aide : on peut s'attendre à des oublis ou à des faux impacts quand
-  - deux calibres sont mélangés sur la même cible (les gros impacts sont comptés plusieurs fois) ;
+  - deux calibres sont mélangés sur la même cible : les gros impacts bien ronds sont comptés une fois, mais ceux dont le bord est déchiré peuvent être comptés deux ou trois fois ;
   - les impacts forment une grande zone arrachée (elle est ignorée) ;
   - les trous apparaissent noirs dans le noir (rien derrière la cible) ;
   - un objet brillant ou un reflet se trouve sur le visuel ;

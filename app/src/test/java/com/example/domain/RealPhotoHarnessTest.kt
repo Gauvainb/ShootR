@@ -31,13 +31,17 @@ class RealPhotoHarnessTest {
             val photo = decodeLikeTheApp(ImageIO.read(file))
             val image = toLuma(photo)
             val started = System.nanoTime()
+            val rejected = ArrayList<Triple<Float, Float, String>>()
             val circle = BlackVisualFinder.find(image)
             val spec = TargetSpecs.forTargetType("C50 (25m/50m)")!!
             val impacts = if (circle == null) emptyList() else {
                 val mmToPhoto = circle.radius / (spec.blackVisualDiameterMm / 2f) / image.width
                 ImpactDetector.detect(
-                    image,
-                    ImpactDetectionParams(
+                    image = image,
+                    trace = { x, y, verdict ->
+                        if (x < 0f) println("INFO ${file.name}: $verdict") else if (verdict != "ok") rejected.add(Triple(x, y, verdict))
+                    },
+                    params = ImpactDetectionParams(
                         centerNormalized = Offset(circle.centerX / image.width, circle.centerY / image.height),
                         blackRadiusNormalized = circle.radius / image.width,
                         mmToPhoto = mmToPhoto,
@@ -49,7 +53,7 @@ class RealPhotoHarnessTest {
             }
             val elapsedMs = (System.nanoTime() - started) / 1_000_000
             println("PHOTO ${file.name}: ${image.width}x${image.height} radius=${circle?.radius?.toInt()} impacts=${impacts.size} ${elapsedMs}ms")
-            annotate(photo, circle, impacts, File(outputDir, file.nameWithoutExtension + ".jpg"))
+            annotate(photo, circle, impacts, rejected, File(outputDir, file.nameWithoutExtension + ".jpg"))
         }
         montage(outputDir)
     }
@@ -110,7 +114,13 @@ class RealPhotoHarnessTest {
         return LumaImage(width, height, luma, min, max, pixels)
     }
 
-    private fun annotate(photo: BufferedImage, circle: VisualCircle?, impacts: List<Offset>, out: File) {
+    private fun annotate(
+        photo: BufferedImage,
+        circle: VisualCircle?,
+        impacts: List<Offset>,
+        rejected: List<Triple<Float, Float, String>>,
+        out: File
+    ) {
         val canvas = BufferedImage(photo.width, photo.height, BufferedImage.TYPE_INT_RGB)
         val g = canvas.createGraphics()
         g.drawImage(photo, 0, 0, null)
@@ -123,6 +133,13 @@ class RealPhotoHarnessTest {
             g.drawOval((cx - r).toInt(), (cy - r).toInt(), (2 * r).toInt(), (2 * r).toInt())
             g.drawLine((cx - 30).toInt(), cy.toInt(), (cx + 30).toInt(), cy.toInt())
             g.drawLine(cx.toInt(), (cy - 30).toInt(), cx.toInt(), (cy + 30).toInt())
+        }
+        // Blobs that were considered and dropped, with the reason.
+        g.color = Color(255, 140, 0)
+        g.font = g.font.deriveFont(15f)
+        rejected.forEach { (x, y, verdict) ->
+            g.drawRect((x - 6).toInt(), (y - 6).toInt(), 12, 12)
+            g.drawString(verdict, x + 9, y + 5)
         }
         g.color = Color(255, 0, 255)
         impacts.forEach {
