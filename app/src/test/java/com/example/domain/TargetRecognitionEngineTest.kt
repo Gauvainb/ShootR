@@ -83,6 +83,20 @@ class TargetRecognitionEngineTest {
     }
 
     @Test
+    fun `does not look for a visual on targets that have none`() {
+        val width = 400
+        val height = 300
+        val luma = blankImage(width, height)
+        // A dark round shape (a steel plate) must not be taken for a 200 mm visual.
+        luma.disc(width, 200, 150, 60, black)
+
+        val result = TargetRecognitionEngine.analyzeLuma(image(width, height, luma), "IPSC Classic / Métallique", null)
+
+        assertTrue(!result.visualFound)
+        assertEquals(0f, result.visualDiameterMm, 0f)
+    }
+
+    @Test
     fun `reports when there is no visual`() {
         val result = TargetRecognitionEngine.analyzeLuma(image(400, 300, blankImage(400, 300)), "C50 (25m/50m)", 200f)
         assertTrue(!result.visualFound)

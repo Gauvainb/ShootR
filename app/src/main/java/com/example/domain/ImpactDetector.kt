@@ -300,7 +300,6 @@ object ImpactDetector {
         val minCore = max(4f, 2.6f * pxPerMm)
         for (blob in secondPass.list) {
             if (blob.inVisual) {
-                // White print where a ring number is expected.
                 // White print where a ring number is expected, unless a hole is merged with it:
                 // a digit is made of thin strokes, a hole has a solid core that is not white.
                 if (blob.whiteShare > 0.3f && onDigit(blob, params, centerX, centerY, pxPerMm) &&
@@ -311,7 +310,6 @@ object ImpactDetector {
                 }
                 accept(blob, secondPass.pixels, holeAreaInVisual)
             } else {
-                // Dark print where a ring number is expected.
                 // Dark print where a ring number is expected, unless it has the solid dark core
                 // of a hole.
                 if (blob.darkShare > 0.5f && onDigit(blob, params, centerX, centerY, pxPerMm) &&

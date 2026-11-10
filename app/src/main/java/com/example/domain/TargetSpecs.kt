@@ -28,14 +28,17 @@ object TargetSpecs {
 }
 
 object Caliber {
+    private val decimalComma = Regex("""(\d),(\d)""")
     private val number = Regex("""\d*\.\d+|\d+""")
 
     /**
      * Bullet diameter in millimeters read from a free-form caliber label, or null when it cannot be
      * determined. Examples: ".22 LR" -> 5.6, "9x19 mm" -> 9.0, "4.5 mm (.177)" -> 4.5,
-     * "5.56x45 mm / .223 Rem" -> 5.56, "38 Special" -> 9.7.
+     * "5.56x45 mm / .223 Rem" -> 5.56, "38 Special" -> 9.7, "4,5 mm" -> 4.5.
      */
-    fun diameterMm(label: String): Float? {
+    fun diameterMm(rawLabel: String): Float? {
+        // French labels use a decimal comma: "4,5 mm", "7,62x39".
+        val label = decimalComma.replace(rawLabel, "$1.$2")
         val match = number.find(label) ?: return null
         val token = match.value
         val value = token.toFloatOrNull() ?: return null

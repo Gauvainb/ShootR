@@ -243,34 +243,13 @@ fun TirTrackerApp() {
 
     var currentTab by remember { mutableStateOf(AppTab.SHOOTING_RANGE) }
 
-    val targetTypeInputState = remember { mutableStateOf("C50 (25m/50m)") }
-    var targetTypeInput by targetTypeInputState
+    var targetTypeInput by remember { mutableStateOf("C50 (25m/50m)") }
 
     // 1. Photo selection & Recognition state
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var detectedTargetResult by remember { mutableStateOf<TargetDetectionResult?>(null) }
     var showTargetDetectionDialog by remember { mutableStateOf(false) }
     var isAnalyzingTarget by remember { mutableStateOf(false) }
-
-    // Real diameter of the black visual of the selected target, which gives the photo's scale.
-    fun visualDiameterMm(): Float =
-        TargetSpecs.forTargetType(targetTypeInputState.value)?.blackVisualDiameterMm?.takeIf { it > 0f }
-            ?: TargetCalibrationDefaults.getReferenceForTargetType(targetTypeInputState.value).diameterMm
-
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            selectedImageUri = uri
-            isAnalyzingTarget = true
-            coroutineScope.launch {
-                val result = TargetRecognitionEngine.analyzeImage(context, uri, targetTypeInputState.value, visualDiameterMm())
-                detectedTargetResult = result
-                showTargetDetectionDialog = true
-                isAnalyzingTarget = false
-            }
-        }
-    }
 
     // 2. Caractérisation de la séance
     var sessionTitleInput by remember { mutableStateOf("Séance de tir") }
@@ -453,6 +432,41 @@ fun TirTrackerApp() {
         }
     }
 
+    // Real diameter of the black visual of the selected target, which gives the photo's scale;
+    // null for targets without one (IPSC, metal plates).
+    fun visualDiameterMm(): Float? {
+        TargetSpecs.forTargetType(targetTypeInput)?.let { spec ->
+            return spec.blackVisualDiameterMm.takeIf { it > 0f }
+        }
+        return TargetCalibrationDefaults.references
+            .firstOrNull { it.targetType.equals(targetTypeInput, ignoreCase = true) }
+            ?.diameterMm
+    }
+
+    // Centers and scales the canvas on the visual found on the photo. Impacts already placed are
+    // rescored against the new center and scale.
+    fun applyDetectedCalibration(result: TargetDetectionResult): Boolean {
+        if (!result.visualFound || result.visualDiameterMm <= 0f) return false
+        val detectedCenter = ImageFit.toCanvas(
+            result.detectedCenterNormalized, canvasWidthPx, canvasHeightPx, result.imageAspectRatio
+        )
+        val shownImageWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, result.imageAspectRatio)
+        val visualRadiusPx = result.detectedBlackRadiusNormalized * shownImageWidthPx
+        if (visualRadiusPx <= 0f) return false
+
+        targetCenterPx = detectedCenter
+        pixelPerMm = visualRadiusPx * 2f / result.visualDiameterMm
+        // Show the calibration ring on the visual it was measured on
+        TargetCalibrationDefaults.references
+            .firstOrNull { it.targetType.equals(result.targetType, ignoreCase = true) && it.diameterMm == result.visualDiameterMm }
+            ?.let { selectedCalibrationRef = it }
+        val ringRadiusPx = selectedCalibrationRef.radiusMm * pixelPerMm
+        calibrationEdgePx = Offset(detectedCenter.x + ringRadiusPx, detectedCenter.y)
+        calibrationStep = CalibrationStep.CALIBRATED
+        recomputeImpacts(detectedCenter, pixelPerMm)
+        return true
+    }
+
     // Automatic impact detection on the photo, using the current calibration (center, scale),
     // the target type and the caliber to know what a bullet hole looks like.
     var isDetectingImpacts by remember { mutableStateOf(false) }
@@ -460,10 +474,20 @@ fun TirTrackerApp() {
     fun detectImpactsOnPhoto() {
         val imageUri = selectedImageUri ?: return
         if (isDetectingImpacts) return
+        if (isAnalyzingTarget) {
+            Toast.makeText(context, "Analyse de la photo en cours, réessayez dans un instant.", Toast.LENGTH_SHORT).show()
+            return
+        }
         isDetectingImpacts = true
         coroutineScope.launch {
             try {
-                val targetRes = detectedTargetResult ?: TargetRecognitionEngine.analyzeImage(context, imageUri, targetTypeInput, visualDiameterMm())
+                val targetRes = detectedTargetResult
+                    ?: TargetRecognitionEngine.analyzeImage(context, imageUri, targetTypeInput, visualDiameterMm())
+                if (selectedImageUri != imageUri) return@launch
+                // Not calibrated yet: use the visual found on the photo, so that detection and
+                // scoring share the same center and scale.
+                if (pixelPerMm <= 0f) applyDetectedCalibration(targetRes)
+
                 val aspect = targetRes.imageAspectRatio
                 val shownWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, aspect)
                 val caliberMm = Caliber.diameterMm(weaponCaliberInput)
@@ -482,25 +506,20 @@ fun TirTrackerApp() {
                         digitRadiiMm = spec?.digitRadiiMm ?: emptyList()
                     )
                 } else {
-                    // Not calibrated on screen: rely on what was found on the photo, if anything.
-                    val spec = TargetSpecs.forTargetType(targetRes.targetType)
-                    val mmToPhoto = if (targetRes.visualFound && targetRes.visualDiameterMm > 0f) {
-                        2f * targetRes.detectedBlackRadiusNormalized / targetRes.visualDiameterMm
-                    } else {
-                        null
-                    }
+                    // No scale at all (no visual found, nothing calibrated): search around the
+                    // on-screen center; impacts are scored with the default scale like taps are.
+                    val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
                     ImpactDetectionParams(
-                        centerNormalized = targetRes.detectedCenterNormalized,
-                        blackRadiusNormalized = targetRes.detectedBlackRadiusNormalized,
-                        mmToPhoto = mmToPhoto,
-                        caliberMm = caliberMm,
-                        cardHalfSizeNormalized = if (mmToPhoto != null) spec?.cardSizeMm?.let { it * 0.49f * mmToPhoto } else null,
-                        digitRadiiMm = if (mmToPhoto != null) spec?.digitRadiiMm ?: emptyList() else emptyList()
+                        centerNormalized = ImageFit.toImage(center, canvasWidthPx, canvasHeightPx, aspect),
+                        blackRadiusNormalized = 0f,
+                        caliberMm = caliberMm
                     )
                 }
 
                 val detected = TargetRecognitionEngine.detectImpacts(context, imageUri, params)
                     .map { ImageFit.toCanvas(it, canvasWidthPx, canvasHeightPx, aspect) }
+                // The photo was changed while detecting: these holes belong to the previous one.
+                if (selectedImageUri != imageUri) return@launch
 
                 // Impacts already on the canvas are kept as they are: only new holes are added.
                 val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
@@ -536,6 +555,43 @@ fun TirTrackerApp() {
         }
     }
 
+    // A new photo: whatever was found or calibrated on the previous one no longer applies.
+    fun resetPhotoAnalysis() {
+        detectedTargetResult = null
+        showTargetDetectionDialog = false
+        pixelPerMm = 0f
+        calibrationEdgePx = null
+        calibrationStep = CalibrationStep.SET_CENTER
+        targetCenterPx = Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+    }
+
+    // Looks for the black visual. The result is dropped if the photo changed in the meantime.
+    fun analyzeSelectedPhoto() {
+        val uri = selectedImageUri ?: return
+        isAnalyzingTarget = true
+        coroutineScope.launch {
+            try {
+                val result = TargetRecognitionEngine.analyzeImage(context, uri, targetTypeInput, visualDiameterMm())
+                if (selectedImageUri == uri) {
+                    detectedTargetResult = result
+                    showTargetDetectionDialog = true
+                }
+            } finally {
+                isAnalyzingTarget = false
+            }
+        }
+    }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            selectedImageUri = uri
+            resetPhotoAnalysis()
+            analyzeSelectedPhoto()
+        }
+    }
+
     // Function to load a past session into the active editor
     fun loadSessionForRetroactiveAdjustment(sessionObj: JSONObject) {
         try {
@@ -550,6 +606,8 @@ fun TirTrackerApp() {
 
             val imgUriStr = sessionObj.optString("imageUri", "")
             selectedImageUri = if (imgUriStr.isNotBlank()) Uri.parse(imgUriStr) else null
+            // Calibration is not saved with a session: what is on screen belongs to another photo.
+            resetPhotoAnalysis()
 
             // Reconstruct impacts
             impactsList.clear()
@@ -720,25 +778,7 @@ fun TirTrackerApp() {
                 if (result.visualFound) {
                     Button(
                         onClick = {
-                            // Center the reticle on the detected visual
-                            val detectedCenter = ImageFit.toCanvas(
-                                result.detectedCenterNormalized, canvasWidthPx, canvasHeightPx, result.imageAspectRatio
-                            )
-                            targetCenterPx = detectedCenter
-
-                            // Scale from the visual's diameter on the photo
-                            if (result.visualDiameterMm > 0f) {
-                                val shownImageWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, result.imageAspectRatio)
-                                val visualRadiusPx = result.detectedBlackRadiusNormalized * shownImageWidthPx
-                                pixelPerMm = visualRadiusPx * 2f / result.visualDiameterMm
-                                // Show the calibration ring on the visual it was measured on
-                                TargetCalibrationDefaults.references
-                                    .firstOrNull { it.targetType.equals(result.targetType, ignoreCase = true) && it.diameterMm == result.visualDiameterMm }
-                                    ?.let { selectedCalibrationRef = it }
-                                val ringRadiusPx = selectedCalibrationRef.radiusMm * pixelPerMm
-                                calibrationEdgePx = Offset(detectedCenter.x + ringRadiusPx, detectedCenter.y)
-                                calibrationStep = CalibrationStep.CALIBRATED
-                            }
+                            applyDetectedCalibration(result)
 
                             showTargetDetectionDialog = false
                             Toast.makeText(context, "Cible calibrée automatiquement.", Toast.LENGTH_SHORT).show()
@@ -1370,15 +1410,8 @@ fun TirTrackerApp() {
                             // Bouton Scanner / Reconnaissance Cible
                             if (selectedImageUri != null) {
                                 OutlinedButton(
-                                    onClick = {
-                                        isAnalyzingTarget = true
-                                        coroutineScope.launch {
-                                            val result = TargetRecognitionEngine.analyzeImage(context, selectedImageUri!!, targetTypeInput, visualDiameterMm())
-                                            detectedTargetResult = result
-                                            showTargetDetectionDialog = true
-                                            isAnalyzingTarget = false
-                                        }
-                                    },
+                                    onClick = { analyzeSelectedPhoto() },
+                                    enabled = !isAnalyzingTarget,
                                     modifier = Modifier.height(44.dp),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {

@@ -106,14 +106,18 @@ object TargetRecognitionEngine {
      * Locates the black visual on the photo.
      *
      * The kind of target cannot be told from a photo (it depends on how it was framed), so the
-     * caller says which target it is and how wide its visual really is.
+     * caller says which target it is and how wide its visual really is; null for a target that
+     * has no black visual (nothing is searched then).
      */
     suspend fun analyzeImage(
         context: Context,
         imageUri: Uri,
         targetType: String,
-        visualDiameterMm: Float
+        visualDiameterMm: Float?
     ): TargetDetectionResult = withContext(Dispatchers.Default) {
+        if (visualDiameterMm == null || visualDiameterMm <= 0f) {
+            return@withContext noVisual(targetType)
+        }
         try {
             val image = loadLuma(context, imageUri, reqSize = 800)
                 ?: return@withContext notFound(targetType, visualDiameterMm, 1f, "Impossible de décoder l'image.")
@@ -123,7 +127,8 @@ object TargetRecognitionEngine {
         }
     }
 
-    internal fun analyzeLuma(image: LumaImage, targetType: String, visualDiameterMm: Float): TargetDetectionResult {
+    internal fun analyzeLuma(image: LumaImage, targetType: String, visualDiameterMm: Float?): TargetDetectionResult {
+        if (visualDiameterMm == null || visualDiameterMm <= 0f) return noVisual(targetType)
         val aspectRatio = image.width.toFloat() / image.height
         val circle = BlackVisualFinder.find(image)
             ?: return notFound(targetType, visualDiameterMm, aspectRatio, "Aucun visuel noir circulaire n'a été repéré sur la photo.")
@@ -145,6 +150,17 @@ object TargetRecognitionEngine {
             imageAspectRatio = aspectRatio
         )
     }
+
+    private fun noVisual(targetType: String): TargetDetectionResult = TargetDetectionResult(
+        targetType = targetType,
+        visualFound = false,
+        confidencePercent = 0,
+        visualDiameterMm = 0f,
+        detectedCenterNormalized = Offset(0.5f, 0.5f),
+        detectedBlackRadiusNormalized = 0f,
+        description = "Ce type de cible n'a pas de visuel noir : le centre et l'échelle ne peuvent pas être repérés automatiquement.",
+        details = "Calibrez la cible à la main avec « Calibrer visuel » sur un repère de taille connue."
+    )
 
     private fun notFound(targetType: String, visualDiameterMm: Float, aspectRatio: Float, reason: String): TargetDetectionResult {
         return TargetDetectionResult(

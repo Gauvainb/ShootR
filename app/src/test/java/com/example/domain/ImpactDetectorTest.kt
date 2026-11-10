@@ -261,6 +261,10 @@ class ImpactDetectorTest {
         assertEquals(9.07f, Caliber.diameterMm(".357 Magnum")!!, 0.01f)
         assertEquals(9.65f, Caliber.diameterMm("38 Special")!!, 0.01f)
         assertEquals(5.59f, Caliber.diameterMm("22 LR")!!, 0.01f)
+        // French decimal comma
+        assertEquals(4.5f, Caliber.diameterMm("4,5 mm")!!, 0.01f)
+        assertEquals(7.62f, Caliber.diameterMm("7,62x39")!!, 0.01f)
+        assertEquals(5.56f, Caliber.diameterMm("5,56x45 mm")!!, 0.01f)
         assertNull(Caliber.diameterMm("N/A"))
         assertNull(Caliber.diameterMm(""))
     }
