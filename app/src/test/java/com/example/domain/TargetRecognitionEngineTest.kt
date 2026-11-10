@@ -22,93 +22,84 @@ class TargetRecognitionEngineTest {
         }
     }
 
-    private fun FloatArray.rect(width: Int, left: Int, top: Int, right: Int, bottom: Int, value: Float) {
-        for (y in top until bottom) for (x in left until right) this[y * width + x] = value
-    }
-
     private fun image(width: Int, height: Int, luma: FloatArray) = LumaImage(width, height, luma, black, white)
 
-    private fun assertContainsPoint(points: List<Offset>, width: Int, height: Int, x: Int, y: Int) {
-        val found = points.any { hypot(it.x * width - x, it.y * height - y) <= 1.5f }
-        assertTrue("no impact detected near ($x, $y) in $points", found)
-    }
-
     @Test
-    fun `finds dark holes on paper and bright holes inside the black visual`() {
-        val size = 800
-        val luma = blankImage(size, size)
-        luma.disc(size, 400, 400, 160, black)
-        val onPaper = listOf(100 to 120, 650 to 200, 300 to 700)
-        val inVisual = listOf(400 to 400, 350 to 460, 470 to 330)
-        onPaper.forEach { (x, y) -> luma.disc(size, x, y, 8, black) }
-        inVisual.forEach { (x, y) -> luma.disc(size, x, y, 8, white) }
-
-        val impacts = TargetRecognitionEngine.findImpactBlobs(
-            image = image(size, size, luma),
-            centerNormalized = Offset(0.5f, 0.5f),
-            blackRadiusNormalized = 160f / size
-        )
-
-        assertEquals(onPaper.size + inVisual.size, impacts.size)
-        (onPaper + inVisual).forEach { (x, y) -> assertContainsPoint(impacts, size, size, x, y) }
-    }
-
-    @Test
-    fun `large dark areas are never reported as impacts`() {
-        val size = 800
-        val luma = blankImage(size, size)
-        luma.disc(size, 400, 400, 160, black)
-        // A wedge-shaped shadow far larger than any bullet hole, plus one real hole. Abandoning the
-        // flood fill midway through such a shape used to leave hole-sized leftovers behind.
-        for (y in 560 until 790) {
-            luma.rect(size, left = 20, top = y, right = (20 + (y - 560) * 3).coerceAtMost(795), bottom = y + 1, value = black)
-        }
-        luma.disc(size, 650, 200, 8, black)
-
-        val impacts = TargetRecognitionEngine.findImpactBlobs(
-            image = image(size, size, luma),
-            centerNormalized = Offset(0.5f, 0.5f),
-            blackRadiusNormalized = 160f / size
-        )
-
-        assertEquals(1, impacts.size)
-        assertContainsPoint(impacts, size, size, 650, 200)
-    }
-
-    @Test
-    fun `hole coordinates are normalized per axis on non square photos`() {
-        val width = 800
-        val height = 600
-        val luma = blankImage(width, height)
-        luma.disc(width, 400, 300, 120, black)
-        luma.disc(width, 700, 90, 8, black)
-
-        val impacts = TargetRecognitionEngine.findImpactBlobs(
-            image = image(width, height, luma),
-            centerNormalized = Offset(0.5f, 0.5f),
-            blackRadiusNormalized = 120f / width
-        )
-
-        assertEquals(1, impacts.size)
-        assertEquals(700f / width, impacts[0].x, 0.002f)
-        assertEquals(90f / height, impacts[0].y, 0.002f)
-    }
-
-    @Test
-    fun `recognizes a C50 target and reports the photo geometry`() {
+    fun `locates the black visual and reports the photo geometry`() {
         val width = 400
         val height = 300
         val luma = blankImage(width, height)
-        // min(width, height) * 0.45 = 135 px card radius; 54 px visual radius => ratio 0.40 (C50)
         luma.disc(width, 220, 140, 54, black)
 
-        val result = TargetRecognitionEngine.analyzeLuma(image(width, height, luma))
+        val result = TargetRecognitionEngine.analyzeLuma(image(width, height, luma), "C50 (25m/50m)", 200f)
 
-        assertEquals("C50 (25m/50m)", result.targetType)
-        assertEquals(220f / width, result.detectedCenterNormalized.x, 0.01f)
-        assertEquals(140f / height, result.detectedCenterNormalized.y, 0.01f)
-        assertEquals(54f / width, result.detectedBlackRadiusNormalized, 0.01f)
+        assertTrue(result.visualFound)
+        assertEquals(220f / width, result.detectedCenterNormalized.x, 0.005f)
+        assertEquals(140f / height, result.detectedCenterNormalized.y, 0.005f)
+        assertEquals(54f / width, result.detectedBlackRadiusNormalized, 0.005f)
+        assertEquals(200f, result.visualDiameterMm, 0f)
         assertEquals(width.toFloat() / height, result.imageAspectRatio, 0.0001f)
+    }
+
+    @Test
+    fun `holes, a sticker and an object across the visual do not move it`() {
+        val width = 900
+        val height = 1200
+        val luma = blankImage(width, height)
+        luma.disc(width, 430, 520, 210, black)
+        // Bright holes inside, including on the outline, and a dark sticker sticking out.
+        listOf(430 to 520, 380 to 600, 500 to 430, 630 to 560, 300 to 380).forEach { (x, y) -> luma.disc(width, x, y, 12, white) }
+        luma.disc(width, 250, 640, 25, black)
+        // A dark object (pistol slide) coming in from the bottom right over the visual.
+        for (y in 620 until 1200) for (x in 520 until 900) if (x - 520 > (y - 620) * 0.2f && x - 520 < (y - 620) * 0.2f + 150) luma[y * width + x] = 40f
+
+        val circle = BlackVisualFinder.find(image(width, height, luma))!!
+
+        assertEquals(430f, circle.centerX, 3f)
+        assertEquals(520f, circle.centerY, 3f)
+        assertEquals(210f, circle.radius, 3f)
+    }
+
+    @Test
+    fun `finds a visual that is wider than the frame`() {
+        val width = 900
+        val height = 1200
+        val luma = blankImage(width, height)
+        luma.disc(width, 450, 620, 540, black)
+        // Reactive-target rings inside: complete circles, unlike the cropped visual.
+        for (r in listOf(150, 250, 350)) {
+            for (a in 0 until 3600) {
+                val x = (450 + r * kotlin.math.cos(a * Math.PI / 1800)).toInt()
+                val y = (620 + r * kotlin.math.sin(a * Math.PI / 1800)).toInt()
+                for (d in -3..3) luma[(y + d) * width + x] = white
+            }
+        }
+
+        val circle = BlackVisualFinder.find(image(width, height, luma))!!
+
+        assertEquals(540f, circle.radius, 10f)
+        assertEquals(450f, circle.centerX, 10f)
+        assertEquals(620f, circle.centerY, 10f)
+    }
+
+    @Test
+    fun `does not look for a visual on targets that have none`() {
+        val width = 400
+        val height = 300
+        val luma = blankImage(width, height)
+        // A dark round shape (a steel plate) must not be taken for a 200 mm visual.
+        luma.disc(width, 200, 150, 60, black)
+
+        val result = TargetRecognitionEngine.analyzeLuma(image(width, height, luma), "IPSC Classic / Métallique", null)
+
+        assertTrue(!result.visualFound)
+        assertEquals(0f, result.visualDiameterMm, 0f)
+    }
+
+    @Test
+    fun `reports when there is no visual`() {
+        val result = TargetRecognitionEngine.analyzeLuma(image(400, 300, blankImage(400, 300)), "C50 (25m/50m)", 200f)
+        assertTrue(!result.visualFound)
     }
 
     @Test
@@ -125,5 +116,12 @@ class TargetRecognitionEngineTest {
 
         // Square photo: identity scaling, as before.
         assertEquals(Offset(250f, 750f), ImageFit.toCanvas(Offset(0.25f, 0.75f), 1000f, 1000f, 1f))
+
+        // toImage is the inverse of toCanvas.
+        for (aspect in listOf(4f / 3f, 3f / 4f, 1f)) {
+            val back = ImageFit.toImage(ImageFit.toCanvas(Offset(0.3f, 0.8f), 1000f, 1000f, aspect), 1000f, 1000f, aspect)
+            assertEquals(0.3f, back.x, 0.0001f)
+            assertEquals(0.8f, back.y, 0.0001f)
+        }
     }
 }
