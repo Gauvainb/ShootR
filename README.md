@@ -8,8 +8,12 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
 
 - **Pointage sur photo** : chargez la photo d'une cible, puis touchez ou glissez pour placer chaque impact. Zoom et déplacement à deux doigts.
 - **Calibration assistée** : placez le centre, puis ajustez un anneau sur un repère de diamètre connu (visuel noir C50 de 200 mm, carabine 10 m de 30,5 mm, pistolet 10 m de 59,5 mm, C200 de 400 mm, ou diamètre personnalisé) pour obtenir l'échelle en px/mm.
-- **Reconnaissance de cible** : analyse de la photo pour proposer le type de cible, la distance, le centre et l'échelle.
-- **Détection automatique des impacts** : dès que la cible reconnue est appliquée, les trous sont recherchés sur la photo et placés. La taille attendue d'un trou est déduite du calibre et de l'échelle ; les impacts qui se chevauchent sont séparés, les cordons et chiffres imprimés sont ignorés. Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter impacts » relance la recherche sans dupliquer ceux déjà placés.
+- **Repérage automatique du visuel** : le visuel noir est localisé sur la photo par son contour, même avec des impacts, des pastilles ou un objet devant. Son centre et son diamètre donnent le centre de la cible et l'échelle, pour le type de cible sélectionné.
+- **Détection automatique des impacts** : dès que le repérage est appliqué, les impacts sont recherchés et placés.
+  - Dans le noir, un impact est une tache plus claire que l'encre ; sur le blanc, une tache qui s'écarte de la couleur locale du papier ; sur une cible réactive, le halo jaune.
+  - La taille d'un impact isolé est mesurée sur la photo elle-même, ce qui permet de séparer les impacts qui se chevauchent.
+  - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés.
+  - Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter impacts » relance la recherche sans dupliquer ceux déjà placés.
 - **Score automatique** selon le type de cible (C50, pistolet 10 m, carabine 10 m, C200), avec mouches (10X).
 - **Ajustement a posteriori** : pour chaque coup, correction des points, cordon ±1, recalage au millimètre, exclusion des « flyers », suppression.
 - **Télémétrie du groupement** : écart extrême (ES), hauteur, largeur, H+L, MOA et dérive du point moyen d'impact.
@@ -17,7 +21,7 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
 - **Évolution de la précision** : graphique du MOA par séance (courbe ou histogramme), filtrable par arme.
 - **Bibliothèque d'armes** pour pré-remplir une séance.
 
-La reconnaissance et la détection reposent sur une analyse d'image locale (seuils de luminance et composantes connexes), pas sur un modèle d'IA distant. Leurs résultats sont des propositions à vérifier.
+Le repérage et la détection reposent sur une analyse d'image locale, sans modèle d'IA ni appel réseau. Leurs résultats sont des propositions à vérifier.
 
 ## Prérequis
 
@@ -61,7 +65,14 @@ Sans keystore d'upload, elle est signée avec la clé debug : l'APK s'installe �
 ./gradlew testDebugUnitTest
 ```
 
-Les tests couvrent la détection d'impacts et la reconnaissance de cible sur des images synthétiques, la conversion des coordonnées photo vers le canevas, et le stockage JSON (via Robolectric).
+Les tests couvrent le repérage du visuel et la détection d'impacts sur des images synthétiques, la conversion des coordonnées photo vers le canevas, et le stockage JSON (via Robolectric).
+
+Pour juger la détection sur de vraies photos, un outil annote chaque photo d'un dossier avec le visuel et les impacts trouvés :
+
+```bash
+TARGET_PHOTOS=/chemin/vers/photos ./gradlew testDebugUnitTest --tests '*RealPhotoHarnessTest*'
+# résultat dans /chemin/vers/photos/annotated (ou dans TARGET_PHOTOS_OUT)
+```
 
 ## Intégration continue
 
@@ -76,9 +87,10 @@ app/src/main/java/com/example/
 │   └── LocalJsonStore.kt           Lecture/écriture de l'historique et des armes
 ├── domain/
 │   ├── BallisticsCalculator.kt     ES, H, L, H+L, MOA, point moyen, clics de correction
-│   ├── ImpactDetector.kt           Détection des trous sur la photo
+│   ├── BlackVisualFinder.kt        Repérage du visuel noir (centre, rayon)
+│   ├── ImpactDetector.kt           Détection des impacts sur la photo
 │   ├── TargetCalibration.kt        Repères de calibration par type de cible
-│   ├── TargetRecognitionEngine.kt  Reconnaissance de cible, décodage de la photo
+│   ├── TargetRecognitionEngine.kt  Décodage de la photo, point d'entrée de l'analyse
 │   └── TargetSpecs.kt              Dimensions des cibles, diamètre des calibres
 └── ui/components/
     ├── CalibrationAssistantPanel.kt
@@ -100,7 +112,12 @@ Au premier lancement, quelques séances et armes d'exemple sont créées. Désin
 
 ## Limites connues
 
-- La détection automatique n'a été validée que sur des images de synthèse. Sur une vraie photo, elle peut manquer des impacts ou en proposer de faux (éclairage très inégal, cible froissée, pastilles) : le résultat est toujours à vérifier.
+- La détection automatique est réglée sur des photos de cibles C50 tirées au pistolet. Elle reste une aide : on peut s'attendre à des oublis ou à des faux impacts quand
+  - deux calibres sont mélangés sur la même cible (les gros impacts sont comptés plusieurs fois) ;
+  - les impacts forment une grande zone arrachée (elle est ignorée) ;
+  - les trous apparaissent noirs dans le noir (rien derrière la cible) ;
+  - un objet brillant ou un reflet se trouve sur le visuel ;
+  - la photo est prise de trop loin pour un petit calibre (comptez au moins 2 pixels par millimètre pour du .22).
 - La photo d'une séance n'est pas copiée dans l'application : après un redémarrage, une séance rouverte peut ne plus afficher son image. Les impacts et les statistiques sont conservés.
 - La séance en cours de saisie n'est pas sauvegardée tant qu'on n'a pas appuyé sur « Enregistrer ».
 - L'affichage est verrouillé en portrait.

@@ -243,11 +243,19 @@ fun TirTrackerApp() {
 
     var currentTab by remember { mutableStateOf(AppTab.SHOOTING_RANGE) }
 
+    val targetTypeInputState = remember { mutableStateOf("C50 (25m/50m)") }
+    var targetTypeInput by targetTypeInputState
+
     // 1. Photo selection & Recognition state
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var detectedTargetResult by remember { mutableStateOf<TargetDetectionResult?>(null) }
     var showTargetDetectionDialog by remember { mutableStateOf(false) }
     var isAnalyzingTarget by remember { mutableStateOf(false) }
+
+    // Real diameter of the black visual of the selected target, which gives the photo's scale.
+    fun visualDiameterMm(): Float =
+        TargetSpecs.forTargetType(targetTypeInputState.value)?.blackVisualDiameterMm?.takeIf { it > 0f }
+            ?: TargetCalibrationDefaults.getReferenceForTargetType(targetTypeInputState.value).diameterMm
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -256,7 +264,7 @@ fun TirTrackerApp() {
             selectedImageUri = uri
             isAnalyzingTarget = true
             coroutineScope.launch {
-                val result = TargetRecognitionEngine.analyzeImage(context, uri)
+                val result = TargetRecognitionEngine.analyzeImage(context, uri, targetTypeInputState.value, visualDiameterMm())
                 detectedTargetResult = result
                 showTargetDetectionDialog = true
                 isAnalyzingTarget = false
@@ -268,7 +276,6 @@ fun TirTrackerApp() {
     var sessionTitleInput by remember { mutableStateOf("Séance de tir") }
     var weaponNameInput by remember { mutableStateOf("CZ 457 Varmint") }
     var weaponCaliberInput by remember { mutableStateOf(".22 LR") }
-    var targetTypeInput by remember { mutableStateOf("C50 (25m/50m)") }
     var distanceInput by remember { mutableStateOf("50") }
     var ammoInput by remember { mutableStateOf("SK Rifle Match 40gr") }
     var notesInput by remember { mutableStateOf("") }
@@ -456,7 +463,7 @@ fun TirTrackerApp() {
         isDetectingImpacts = true
         coroutineScope.launch {
             try {
-                val targetRes = detectedTargetResult ?: TargetRecognitionEngine.analyzeImage(context, imageUri)
+                val targetRes = detectedTargetResult ?: TargetRecognitionEngine.analyzeImage(context, imageUri, targetTypeInput, visualDiameterMm())
                 val aspect = targetRes.imageAspectRatio
                 val shownWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, aspect)
                 val caliberMm = Caliber.diameterMm(weaponCaliberInput)
@@ -469,14 +476,26 @@ fun TirTrackerApp() {
                         centerNormalized = ImageFit.toImage(center, canvasWidthPx, canvasHeightPx, aspect),
                         blackRadiusNormalized = spec?.let { it.blackVisualDiameterMm / 2f * mmToPhoto }
                             ?: targetRes.detectedBlackRadiusNormalized,
-                        holeDiameterNormalized = caliberMm?.let { it * mmToPhoto },
-                        // Slightly more than the half-diagonal of the card.
-                        searchRadiusNormalized = spec?.cardSizeMm?.let { it * 0.75f * mmToPhoto }
+                        mmToPhoto = mmToPhoto,
+                        caliberMm = caliberMm,
+                        cardHalfSizeNormalized = spec?.cardSizeMm?.let { it * 0.49f * mmToPhoto },
+                        digitRadiiMm = spec?.digitRadiiMm ?: emptyList()
                     )
                 } else {
+                    // Not calibrated on screen: rely on what was found on the photo, if anything.
+                    val spec = TargetSpecs.forTargetType(targetRes.targetType)
+                    val mmToPhoto = if (targetRes.visualFound && targetRes.visualDiameterMm > 0f) {
+                        2f * targetRes.detectedBlackRadiusNormalized / targetRes.visualDiameterMm
+                    } else {
+                        null
+                    }
                     ImpactDetectionParams(
                         centerNormalized = targetRes.detectedCenterNormalized,
-                        blackRadiusNormalized = targetRes.detectedBlackRadiusNormalized
+                        blackRadiusNormalized = targetRes.detectedBlackRadiusNormalized,
+                        mmToPhoto = mmToPhoto,
+                        caliberMm = caliberMm,
+                        cardHalfSizeNormalized = if (mmToPhoto != null) spec?.cardSizeMm?.let { it * 0.49f * mmToPhoto } else null,
+                        digitRadiiMm = if (mmToPhoto != null) spec?.digitRadiiMm ?: emptyList() else emptyList()
                     )
                 }
 
@@ -635,7 +654,7 @@ fun TirTrackerApp() {
         }
     }
 
-    // DIALOG: Reconnaissance automatique de cible
+    // DIALOG: Repérage automatique du visuel
     if (showTargetDetectionDialog && detectedTargetResult != null) {
         val result = detectedTargetResult!!
         AlertDialog(
@@ -645,7 +664,7 @@ fun TirTrackerApp() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Reconnaissance de cible IA", fontWeight = FontWeight.Bold)
+                    Text("Repérage de la cible", fontWeight = FontWeight.Bold)
                 }
             },
             text = {
@@ -657,14 +676,14 @@ fun TirTrackerApp() {
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text(
-                                text = "🎯 Cible détectée : ${result.targetType}",
+                                text = if (result.visualFound) "🎯 Visuel noir repéré" else "Visuel noir non repéré",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Niveau de confiance : ${result.confidencePercent}%",
+                                text = "Cible sélectionnée : ${result.targetType}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.secondary,
                                 fontWeight = FontWeight.Bold
@@ -684,50 +703,52 @@ fun TirTrackerApp() {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Text("Paramètres automatiques proposés :", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                            Text("• Distance préconisée : ${result.suggestedDistanceMeters} m", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("• Diamètre visuel : ${result.visualDiameterMm} mm / Total : ${result.totalDiameterMm} mm", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("• Centrage automatique calculé sur le visuel noir", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (result.visualFound) {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("En appliquant :", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                Text("• Centre placé au milieu du visuel", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("• Échelle calculée pour un visuel de ${result.visualDiameterMm} mm", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("• Impacts recherchés automatiquement", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Si ce n'est pas la bonne cible, fermez, changez le type de cible puis relancez « Scanner cible ».", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                            }
                         }
                     }
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        targetTypeInput = result.targetType
-                        distanceInput = result.suggestedDistanceMeters.toString()
+                if (result.visualFound) {
+                    Button(
+                        onClick = {
+                            // Center the reticle on the detected visual
+                            val detectedCenter = ImageFit.toCanvas(
+                                result.detectedCenterNormalized, canvasWidthPx, canvasHeightPx, result.imageAspectRatio
+                            )
+                            targetCenterPx = detectedCenter
 
-                        // Automatically center the reticle on the detected center
-                        val detectedCenter = ImageFit.toCanvas(
-                            result.detectedCenterNormalized, canvasWidthPx, canvasHeightPx, result.imageAspectRatio
-                        )
-                        targetCenterPx = detectedCenter
+                            // Scale from the visual's diameter on the photo
+                            if (result.visualDiameterMm > 0f) {
+                                val shownImageWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, result.imageAspectRatio)
+                                val visualRadiusPx = result.detectedBlackRadiusNormalized * shownImageWidthPx
+                                pixelPerMm = visualRadiusPx * 2f / result.visualDiameterMm
+                                // Show the calibration ring on the visual it was measured on
+                                TargetCalibrationDefaults.references
+                                    .firstOrNull { it.targetType.equals(result.targetType, ignoreCase = true) && it.diameterMm == result.visualDiameterMm }
+                                    ?.let { selectedCalibrationRef = it }
+                                val ringRadiusPx = selectedCalibrationRef.radiusMm * pixelPerMm
+                                calibrationEdgePx = Offset(detectedCenter.x + ringRadiusPx, detectedCenter.y)
+                                calibrationStep = CalibrationStep.CALIBRATED
+                            }
 
-                        // Estimate pixelPerMm based on detected visual diameter
-                        if (result.detectedBlackRadiusNormalized > 0.02f && result.visualDiameterMm > 0f) {
-                            val shownImageWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, result.imageAspectRatio)
-                            val estimatedVisualPixels = (result.detectedBlackRadiusNormalized * 2f) * shownImageWidthPx
-                            pixelPerMm = estimatedVisualPixels / result.visualDiameterMm
-                            val rPx = estimatedVisualPixels / 2f
-                            calibrationEdgePx = Offset(detectedCenter.x + rPx, detectedCenter.y)
-                            calibrationStep = CalibrationStep.CALIBRATED
+                            showTargetDetectionDialog = false
+                            Toast.makeText(context, "Cible calibrée automatiquement.", Toast.LENGTH_SHORT).show()
+
+                            // The target is now centered and scaled: look for the impacts right away.
+                            detectImpactsOnPhoto()
                         }
-
-                        showTargetDetectionDialog = false
-                        Toast.makeText(context, "Cible configurée : ${result.targetType} (Étalonnage auto)", Toast.LENGTH_SHORT).show()
-
-                        // The target is now centered and scaled: look for the impacts right away.
-                        detectImpactsOnPhoto()
+                    ) {
+                        Text("Appliquer & Calibrer")
                     }
-                ) {
-                    Text("Appliquer & Calibrer")
                 }
             },
             dismissButton = {
@@ -1186,9 +1207,9 @@ fun TirTrackerApp() {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("Type de cible :", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (detectedTargetResult != null) {
+                                if (detectedTargetResult?.visualFound == true) {
                                     Text(
-                                        text = "🎯 IA : ${detectedTargetResult?.targetType}",
+                                        text = "🎯 Visuel repéré",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.secondary
@@ -1352,7 +1373,7 @@ fun TirTrackerApp() {
                                     onClick = {
                                         isAnalyzingTarget = true
                                         coroutineScope.launch {
-                                            val result = TargetRecognitionEngine.analyzeImage(context, selectedImageUri!!)
+                                            val result = TargetRecognitionEngine.analyzeImage(context, selectedImageUri!!, targetTypeInput, visualDiameterMm())
                                             detectedTargetResult = result
                                             showTargetDetectionDialog = true
                                             isAnalyzingTarget = false

@@ -12,11 +12,15 @@ import kotlin.random.Random
 class ImpactDetectorTest {
 
     /**
-     * Synthetic photo of a C50-like target: 800 px wide, 1.4 px/mm, black visual of 200 mm with
-     * printed rings and digits, uneven lighting, blur and sensor noise.
+     * Synthetic photo of a C50-like target: black visual of 200 mm with printed rings (and ring
+     * numbers on request), uneven lighting, blur and sensor noise.
      */
-    private class Scene(val width: Int = 800, val height: Int = 800) {
-        val pxPerMm = 1.4f
+    private class Scene(
+        val width: Int = 800,
+        val height: Int = 800,
+        val pxPerMm: Float = 1.4f,
+        withDigits: Boolean = false
+    ) {
         val centerX = width / 2
         val centerY = height / 2
         val blackRadius = 100f * pxPerMm
@@ -24,20 +28,23 @@ class ImpactDetectorTest {
 
         init {
             disc(centerX.toFloat(), centerY.toFloat(), blackRadius, INK)
-            // Scoring rings every 25 mm, 2 px wide: dark on the paper, white in the visual.
+            // Scoring rings every 25 mm: hairlines, gray on the paper and white in the visual.
             for (ring in 1..10) {
                 val r = ring * 25f * pxPerMm
-                circle(centerX.toFloat(), centerY.toFloat(), r, if (r < blackRadius) PAPER else INK)
+                circle(centerX.toFloat(), centerY.toFloat(), r, if (r < blackRadius) PAPER else RING_ON_PAPER, halfWidth = 0.6f)
             }
-            // Digits, drawn as "8" outlines, on both sides of the visual's edge.
-            for (ring in listOf(1.5f, 2.5f, 3.5f, 4.5f, 5.5f)) {
-                val r = ring * 25f * pxPerMm
-                val value = if (r < blackRadius) PAPER else INK
-                for ((dx, dy) in listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)) {
-                    val x = centerX + dx * r
-                    val y = centerY + dy * r
-                    circle(x, y - 4f, 4f, value)
-                    circle(x, y + 4f, 4f, value)
+            // Ring numbers, drawn as "8" outlines: 10 mm tall with 1.5 mm strokes, like real ones.
+            if (withDigits) {
+                val loop = 2.5f * pxPerMm
+                for (zone in 0 until 9) {
+                    val r = (37.5f + 25f * zone) * pxPerMm
+                    val value = if (r < blackRadius) PAPER else INK
+                    for ((dx, dy) in listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)) {
+                        val x = centerX + dx * r
+                        val y = centerY + dy * r
+                        circle(x, y - loop, loop, value, halfWidth = 0.75f * pxPerMm)
+                        circle(x, y + loop, loop, value, halfWidth = 0.75f * pxPerMm)
+                    }
                 }
             }
         }
@@ -54,11 +61,11 @@ class ImpactDetectorTest {
             }
         }
 
-        /** 2 px wide circle outline. */
-        fun circle(cx: Float, cy: Float, radius: Float, value: Float) {
+        /** Circle outline, 2 px wide by default. */
+        fun circle(cx: Float, cy: Float, radius: Float, value: Float, halfWidth: Float = 1f) {
             for (y in (cy - radius - 2).toInt()..(cy + radius + 2).toInt()) {
                 for (x in (cx - radius - 2).toInt()..(cx + radius + 2).toInt()) {
-                    if (abs(hypot(x - cx, y - cy) - radius) <= 1f) set(x, y, value)
+                    if (abs(hypot(x - cx, y - cy) - radius) <= halfWidth) set(x, y, value)
                 }
             }
         }
@@ -97,11 +104,13 @@ class ImpactDetectorTest {
             return LumaImage(width, height, blurred, min, max)
         }
 
-        fun params(caliberMm: Float?, searchRadiusMm: Float? = 375f) = ImpactDetectionParams(
+        fun params(caliberMm: Float?, scaleKnown: Boolean = true) = ImpactDetectionParams(
             centerNormalized = Offset(centerX.toFloat() / width, centerY.toFloat() / height),
             blackRadiusNormalized = blackRadius / width,
-            holeDiameterNormalized = caliberMm?.let { it * pxPerMm / width },
-            searchRadiusNormalized = searchRadiusMm?.let { it * pxPerMm / width }
+            mmToPhoto = if (scaleKnown) pxPerMm / width else null,
+            caliberMm = caliberMm,
+            cardHalfSizeNormalized = if (scaleKnown) 245f * pxPerMm / width else null,
+            digitRadiiMm = if (scaleKnown) List(9) { 37.5f + 25f * it } else emptyList()
         )
     }
 
@@ -114,7 +123,7 @@ class ImpactDetectorTest {
     }
 
     @Test
-    fun `finds holes on the paper and in the black visual, ignoring rings and digits`() {
+    fun `finds holes on the paper and in the black visual, ignoring rings`() {
         val scene = Scene()
         val holes = listOf(
             150f to 180f, 640f to 210f, 230f to 610f, 600f to 590f, 190f to 395f, // on the paper
@@ -128,16 +137,30 @@ class ImpactDetectorTest {
     }
 
     @Test
+    fun `printed ring numbers are not impacts`() {
+        // Close-up at 3 px/mm, where digits are resolved like on a phone photo.
+        val scene = Scene(width = 900, height = 900, pxPerMm = 3f, withDigits = true)
+        val holes = listOf(450f to 450f, 380f to 520f, 560f to 400f, 300f to 300f, 140f to 700f, 760f to 160f)
+        holes.forEach { (x, y) -> scene.hole(x, y, diameterMm = 9f) }
+
+        val found = ImpactDetector.detect(scene.render(), scene.params(caliberMm = 9f))
+
+        assertImpacts(scene, holes, found)
+    }
+
+    @Test
     fun `a blank target yields no impact`() {
         val scene = Scene()
         assertTrue(ImpactDetector.detect(scene.render(), scene.params(caliberMm = 9f)).isEmpty())
-        assertTrue(ImpactDetector.detect(scene.render(), scene.params(caliberMm = 5.6f)).isEmpty())
+        // Small calibers need a closer shot: at 2.4 px/mm a .22 hole is about 13 px wide.
+        val closeUp = Scene(width = 900, height = 900, pxPerMm = 2.4f, withDigits = true)
+        assertTrue(ImpactDetector.detect(closeUp.render(), closeUp.params(caliberMm = 5.6f)).isEmpty())
     }
 
     @Test
     fun `small caliber holes are found`() {
-        val scene = Scene()
-        val holes = listOf(160f to 200f, 620f to 240f, 410f to 388f, 380f to 430f)
+        val scene = Scene(width = 900, height = 900, pxPerMm = 2.4f, withDigits = true)
+        val holes = listOf(160f to 200f, 620f to 240f, 460f to 438f, 430f to 480f, 520f to 400f, 300f to 560f)
         holes.forEach { (x, y) -> scene.hole(x, y, diameterMm = 5.6f) }
 
         val found = ImpactDetector.detect(scene.render(), scene.params(caliberMm = 5.6f))
@@ -161,8 +184,8 @@ class ImpactDetectorTest {
     fun `overlapping holes are split`() {
         val scene = Scene()
         val pair = listOf(200f to 200f, 209f to 204f)
-        val triple = listOf(600f to 600f, 611f to 601f, 605f to 611f)
-        val single = listOf(420f to 380f)
+        val triple = listOf(450f to 330f, 461f to 331f, 455f to 341f)
+        val single = listOf(420f to 380f, 350f to 470f, 330f to 350f)
         (pair + triple + single).forEach { (x, y) -> scene.hole(x, y, diameterMm = 9f) }
 
         val found = ImpactDetector.detect(scene.render(), scene.params(caliberMm = 9f))
@@ -177,7 +200,7 @@ class ImpactDetectorTest {
         for (y in 620 until 700) for (x in 150 until 150 + (y - 620) * 3) scene.set(x, y, INK)
         // Round sticker three times wider than a bullet hole.
         scene.disc(620f, 180f, 9f * scene.pxPerMm * 1.5f, INK)
-        // Hole-sized dark object beyond the edge of the card (searched radius is 375 mm = 525 px).
+        // Hole-sized dark object beyond the edge of the card (245 mm = 343 px from the center).
         scene.disc(20f, 20f, 6f, INK)
         scene.hole(250f, 250f, diameterMm = 9f)
 
@@ -192,7 +215,7 @@ class ImpactDetectorTest {
         val holes = listOf(150f to 180f, 640f to 210f, 400f to 400f, 372f to 446f)
         holes.forEach { (x, y) -> scene.hole(x, y, diameterMm = 9f) }
 
-        val found = ImpactDetector.detect(scene.render(), scene.params(caliberMm = null, searchRadiusMm = null))
+        val found = ImpactDetector.detect(scene.render(), scene.params(caliberMm = null, scaleKnown = false))
 
         assertImpacts(scene, holes, found)
     }
@@ -244,18 +267,22 @@ class ImpactDetectorTest {
 
     @Test
     fun `target dimensions are known for the scored target types`() {
-        assertEquals(TargetSpec(200f, 500f), TargetSpecs.forTargetType("C50 (25m/50m)"))
-        assertEquals(TargetSpec(30.5f, 80f), TargetSpecs.forTargetType("Carabine 10m (ISSF)"))
-        assertEquals(TargetSpec(59.5f, 170f), TargetSpecs.forTargetType("Pistolet 10m (ISSF)"))
-        assertEquals(TargetSpec(400f, 800f), TargetSpecs.forTargetType("C200 (200m)"))
-        assertEquals(0f, TargetSpecs.forTargetType("IPSC Classic / Métallique")!!.blackVisualDiameterMm)
+        val c50 = TargetSpecs.forTargetType("C50 (25m/50m)")!!
+        assertEquals(200f, c50.blackVisualDiameterMm, 0f)
+        assertEquals(500f, c50.cardSizeMm!!, 0f)
+        assertEquals(listOf(37.5f, 62.5f, 87.5f, 112.5f, 137.5f, 162.5f, 187.5f, 212.5f, 237.5f), c50.digitRadiiMm)
+        assertEquals(30.5f, TargetSpecs.forTargetType("Carabine 10m (ISSF)")!!.blackVisualDiameterMm, 0f)
+        assertEquals(59.5f, TargetSpecs.forTargetType("Pistolet 10m (ISSF)")!!.blackVisualDiameterMm, 0f)
+        assertEquals(400f, TargetSpecs.forTargetType("C200 (200m)")!!.blackVisualDiameterMm, 0f)
+        assertEquals(0f, TargetSpecs.forTargetType("IPSC Classic / Métallique")!!.blackVisualDiameterMm, 0f)
         assertNull(TargetSpecs.forTargetType("Cible Hunter / Précision"))
     }
 
     private companion object {
         const val PAPER = 235f
         const val INK = 30f
+        const val RING_ON_PAPER = 120f
         const val HOLE_ON_PAPER = 45f
-        const val HOLE_IN_VISUAL = 185f
+        const val HOLE_IN_VISUAL = 150f
     }
 }

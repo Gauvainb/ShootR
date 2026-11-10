@@ -2,7 +2,9 @@ package com.example.domain
 
 import androidx.compose.ui.geometry.Offset
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -11,56 +13,80 @@ import kotlin.math.sqrt
  *
  * @property centerNormalized target center, normalized to the photo ([0..1] on each axis)
  * @property blackRadiusNormalized radius of the black visual; 0 when the target has none
- * @property holeDiameterNormalized expected bullet hole diameter (caliber at the photo scale), or
- *   null when the scale is unknown
- * @property searchRadiusNormalized impacts farther than this from the center are ignored (edge of
- *   the target card), or null to search the whole photo
+ * @property mmToPhoto size of one millimeter on the photo, or null when the scale is unknown
+ * @property caliberMm bullet diameter, or null when unknown
+ * @property cardHalfSizeNormalized half the side of the (square, upright) target card: impacts
+ *   outside of it are ignored; null to search the whole photo
+ * @property digitRadiiMm distances from the center at which ring numbers are printed along the
+ *   horizontal and vertical axes; lets the detector tell a printed digit from a hole
  */
 data class ImpactDetectionParams(
     val centerNormalized: Offset,
     val blackRadiusNormalized: Float,
-    val holeDiameterNormalized: Float? = null,
-    val searchRadiusNormalized: Float? = null
+    val mmToPhoto: Float? = null,
+    val caliberMm: Float? = null,
+    val cardHalfSizeNormalized: Float? = null,
+    val digitRadiiMm: List<Float> = emptyList()
 )
 
 /**
  * Finds bullet holes on a target photo.
  *
- * A hole shows up as a compact spot that contrasts with what surrounds it: darker than the paper
- * outside the black visual, lighter than the ink inside it. Candidate pixels are grouped into
- * connected blobs, then each blob is kept only if its size and shape are those of a hole (or of a
- * few overlapping holes, which are split). Printed rings, digits, shadows and the visual itself are
- * rejected because they are too thin, hollow, or large.
+ * A hole is a compact mark that differs from what surrounds it: lighter than the ink inside the
+ * black visual, or off the paper's color outside of it. On reactive ("splatter") targets the mark
+ * is the bright yellow halo around the hole. Marks are grouped into blobs; the typical size of a
+ * single hole is measured on the photo itself (from the isolated, round blobs), and each blob is
+ * then counted as one hole, split into several overlapping holes, or rejected: printed rings and
+ * digits, stickers, shadows, hands and objects are too thin, too hollow, too round or too large.
  */
 object ImpactDetector {
-    private const val NOT_CANDIDATE: Byte = 0
-    private const val ON_PAPER: Byte = 1
-    private const val IN_VISUAL: Byte = 2
+    private const val MAX_HOLES_PER_BLOB = 8
+    private const val PAPER_TINT_TOLERANCE = 28f
 
-    private const val MIN_CONTRAST = 25f
-    private const val MAX_HOLES_PER_BLOB = 6
+    private class Blob(
+        val start: Int,
+        val area: Int,
+        val x: Float,
+        val y: Float,
+        val solidity: Float,
+        val elongation: Float,
+        val length: Float,
+        val thickness: Float,
+        val inVisual: Boolean,
+        val inkShare: Float,
+        val darkShare: Float,
+        val whiteShare: Float,
+        val minCenterDistance: Float
+    )
+
+    private class Blobs(val list: List<Blob>, val pixels: IntArray)
 
     fun detect(image: LumaImage, params: ImpactDetectionParams): List<Offset> {
         val width = image.width
         val height = image.height
         if (width < 100 || height < 100) return emptyList()
+        val n = width * height
         val luma = image.luma
-        val pixelCount = width * height
+        val argb = image.argb
 
         val centerX = params.centerNormalized.x * width
         val centerY = params.centerNormalized.y * height
-        val blackRadius = params.blackRadiusNormalized * width
-        // Pixels on the edge of the visual are ambiguous (the radius is never exact): skip them.
-        val edgeBand = if (blackRadius > 0f) max(1.5f, blackRadius * 0.03f) else 0f
-        val innerSq = square(max(0f, blackRadius - edgeBand))
-        val outerSq = square(blackRadius + edgeBand)
-        val hasVisual = blackRadius > edgeBand
-        val searchSq = params.searchRadiusNormalized?.let { square(it * width) } ?: Float.MAX_VALUE
+        val visualRadius = params.blackRadiusNormalized * width
+        val hasVisual = visualRadius > 4f
+        // Without a known scale, assume the usual 200 mm visual, or a photo about 300 mm wide.
+        val pxPerMm = params.mmToPhoto?.let { it * width }
+            ?: if (hasVisual) visualRadius / 100f else width / 300f
+        val cardHalfSize = params.cardHalfSizeNormalized?.let { it * width } ?: Float.MAX_VALUE
 
-        // 1. Split the photo into "paper" and "black visual" regions and measure their brightness.
-        val region = ByteArray(pixelCount)
+        // 1. Brightness of the ink and of the paper.
+        val inVisual = BooleanArray(n)
+        val inkHistogram = IntArray(256)
         val paperHistogram = IntArray(256)
-        val visualHistogram = IntArray(256)
+        // Tint of the paper (red minus green, green minus blue), to tell it from skin or objects
+        // that are just as bright.
+        val warmHistogram = IntArray(511)
+        val coolHistogram = IntArray(511)
+        val visualSq = visualRadius * visualRadius
         for (y in 0 until height) {
             val dy = y - centerY
             val row = y * width
@@ -68,131 +94,197 @@ object ImpactDetector {
                 val dx = x - centerX
                 val distSq = dx * dx + dy * dy
                 val bin = luma[row + x].toInt().coerceIn(0, 255)
-                if (hasVisual && distSq < innerSq) {
-                    region[row + x] = IN_VISUAL
-                    visualHistogram[bin]++
-                } else if ((!hasVisual || distSq > outerSq) && distSq < searchSq) {
-                    region[row + x] = ON_PAPER
+                if (hasVisual && distSq < visualSq) {
+                    inVisual[row + x] = true
+                    if (distSq < visualSq * 0.94f) inkHistogram[bin]++
+                } else if (!hasVisual || (distSq > visualSq * 1.1f && distSq < visualSq * 4.84f)) {
                     paperHistogram[bin]++
+                    val i = row + x
+                    warmHistogram[(red(argb, luma, i) - green(argb, luma, i)).toInt() + 255]++
+                    coolHistogram[(green(argb, luma, i) - blue(argb, luma, i)).toInt() + 255]++
                 }
             }
         }
-
         val paperLevel = percentile(paperHistogram, 0.5f) ?: return emptyList()
-        val inkLevel = (if (hasVisual) percentile(visualHistogram, 0.5f) else null)
+        val inkLevel = (if (hasVisual) percentile(inkHistogram, 0.5f) else null)
             ?: percentile(paperHistogram, 0.02f)
             ?: return emptyList()
         val contrast = paperLevel - inkLevel
-        if (contrast < MIN_CONTRAST) return emptyList()
+        if (contrast < 25f) return emptyList()
 
-        val darkThreshold = paperLevel - contrast * 0.5f
-        val brightThreshold = inkLevel + contrast * 0.6f
-
-        // 2. Keep only pixels that contrast with their region.
-        for (i in 0 until pixelCount) {
-            when (region[i]) {
-                ON_PAPER -> if (luma[i] >= darkThreshold) region[i] = NOT_CANDIDATE
-                IN_VISUAL -> if (luma[i] <= brightThreshold) region[i] = NOT_CANDIDATE
-            }
-        }
-
-        val scaleKnown = params.holeDiameterNormalized != null
-        val holeDiameter = max(3f, (params.holeDiameterNormalized ?: 0.03f) * width)
-        val holeArea = (PI * holeDiameter * holeDiameter / 4.0).toFloat()
-
-        // 3. Erase structures much thinner than a hole (printed rings, digits, creases). This also
-        //    detaches a hole from a ring line it touches.
-        val thinness = when {
-            !scaleKnown -> 1
-            holeDiameter >= 6f -> max(1, (holeDiameter * 0.12f).toInt())
-            else -> 0
-        }
-        if (thinness > 0) removeThinStructures(region, width, height, thinness)
-
-        // 4. Group candidates into blobs and keep the hole-shaped ones.
-
-        // Every pixel is enqueued at most once over the whole scan, so one buffer serves all blobs.
-        val queue = IntArray(pixelCount)
-        val impacts = ArrayList<Offset>()
-
-        for (seed in 0 until pixelCount) {
-            val kind = region[seed]
-            if (kind == NOT_CANDIDATE) continue
-
-            var head = 0
-            var tail = 0
-            queue[tail++] = seed
-            region[seed] = NOT_CANDIDATE
-            var sumX = 0.0
-            var sumY = 0.0
-            var sumXX = 0.0
-            var sumYY = 0.0
-            var sumXY = 0.0
-
-            while (head < tail) {
-                val p = queue[head++]
-                val px = p % width
-                val py = p / width
-                sumX += px
-                sumY += py
-                sumXX += px.toDouble() * px
-                sumYY += py.toDouble() * py
-                sumXY += px.toDouble() * py
-
-                val yStart = if (py > 0) py - 1 else 0
-                val yEnd = if (py < height - 1) py + 1 else py
-                val xStart = if (px > 0) px - 1 else 0
-                val xEnd = if (px < width - 1) px + 1 else px
-                for (ny in yStart..yEnd) {
-                    val nRow = ny * width
-                    for (nx in xStart..xEnd) {
-                        val n = nRow + nx
-                        if (region[n] == kind) {
-                            region[n] = NOT_CANDIDATE
-                            queue[tail++] = n
-                        }
+        // 2. Local color of the paper, on a coarse grid, so that shadows and uneven lighting do
+        //    not count as marks.
+        val cell = max(2, (8f * pxPerMm).roundToInt())
+        val gridW = (width + cell - 1) / cell
+        val gridH = (height + cell - 1) / cell
+        val cellR = FloatArray(gridW * gridH)
+        val cellG = FloatArray(gridW * gridH)
+        val cellB = FloatArray(gridW * gridH)
+        val cellPaper = FloatArray(gridW * gridH)
+        val cellTotal = FloatArray(gridW * gridH)
+        val paperFloor = paperLevel - contrast * 0.25f
+        val paperWarm = (percentile(warmHistogram, 0.5f) ?: 255f) - 255f
+        val paperCool = (percentile(coolHistogram, 0.5f) ?: 255f) - 255f
+        for (y in 0 until height) {
+            val gy = y / cell
+            for (x in 0 until width) {
+                val i = y * width + x
+                val g = gy * gridW + x / cell
+                cellTotal[g] += 1f
+                if (!inVisual[i] && luma[i] > paperFloor) {
+                    val r = red(argb, luma, i)
+                    val gr = green(argb, luma, i)
+                    val b = blue(argb, luma, i)
+                    if (abs(r - gr - paperWarm) < PAPER_TINT_TOLERANCE && abs(gr - b - paperCool) < PAPER_TINT_TOLERANCE) {
+                        cellPaper[g] += 1f
+                        cellR[g] += r
+                        cellG[g] += gr
+                        cellB[g] += b
                     }
                 }
             }
-
-            val area = tail
-            val minArea = holeArea * (if (scaleKnown) 0.25f else 0.16f)
-            val maxArea = holeArea * (if (scaleKnown) MAX_HOLES_PER_BLOB + 0.5f else 6.25f)
-            if (area < minArea || area > maxArea) continue
-
-            // Shape: equivalent ellipse from second-order moments.
-            val meanX = sumX / area
-            val meanY = sumY / area
-            val varX = sumXX / area - meanX * meanX + 1.0 / 12.0
-            val varY = sumYY / area - meanY * meanY + 1.0 / 12.0
-            val covXY = sumXY / area - meanX * meanY
-            val halfTrace = (varX + varY) / 2.0
-            val spread = sqrt(square((varX - varY) / 2.0) + covXY * covXY)
-            val sigmaMajor = sqrt(halfTrace + spread)
-            val sigmaMinor = sqrt(max(halfTrace - spread, 1.0 / 12.0))
-            // 1.0 for a filled disc or ellipse, much lower for outlines (digits, ring fragments).
-            val solidity = area / (4.0 * PI * sigmaMajor * sigmaMinor)
-            val length = 4.0 * sigmaMajor
-            val thickness = 4.0 * sigmaMinor
-
-            if (!scaleKnown) {
-                if (solidity >= 0.6) impacts.add(Offset((meanX / width).toFloat(), (meanY / height).toFloat()))
-                continue
+        }
+        val localR = FloatArray(gridW * gridH)
+        val localG = FloatArray(gridW * gridH)
+        val localB = FloatArray(gridW * gridH)
+        val paperShare = FloatArray(gridW * gridH)
+        for (gy in 0 until gridH) {
+            for (gx in 0 until gridW) {
+                var r = 0f
+                var g = 0f
+                var b = 0f
+                var count = 0f
+                var total = 0f
+                for (ny in max(0, gy - 2)..min(gridH - 1, gy + 2)) {
+                    for (nx in max(0, gx - 2)..min(gridW - 1, gx + 2)) {
+                        val c = ny * gridW + nx
+                        r += cellR[c]
+                        g += cellG[c]
+                        b += cellB[c]
+                        count += cellPaper[c]
+                        total += cellTotal[c]
+                    }
+                }
+                val c = gy * gridW + gx
+                paperShare[c] = if (total > 0f) count / total else 0f
+                if (count > 0f) {
+                    localR[c] = r / count
+                    localG[c] = g / count
+                    localB[c] = b / count
+                }
             }
+        }
 
-            if (solidity < 0.65) continue
-            if (thickness < 0.5 * holeDiameter) continue
+        // 3. Candidate pixels.
+        val brightInVisual = inkLevel + contrast * 0.22f
+        val paperDeviation = max(12f, contrast * 0.065f)
+        val inkLike = inkLevel + contrast * 0.35f
+        val whiteLike = paperLevel - contrast * 0.15f
+        val candidate = BooleanArray(n)
+        val yellow = BooleanArray(n)
+        var yellowInVisual = 0
+        var visualPixels = 0
+        for (y in 0 until height) {
+            val gy = y / cell
+            for (x in 0 until width) {
+                val i = y * width + x
+                val r = red(argb, luma, i)
+                val g = green(argb, luma, i)
+                val b = blue(argb, luma, i)
+                // Vivid yellow-green: the halo of a reactive target.
+                val isYellow = g > 150f && r > 140f && b < 0.45f * min(r, g)
+                yellow[i] = isYellow
+                if (inVisual[i]) {
+                    visualPixels++
+                    if (isYellow) yellowInVisual++
+                    // The red center of reactive targets is not a mark.
+                    val pureRed = r > 150f && g < 80f && b < 120f
+                    candidate[i] = luma[i] > brightInVisual && !pureRed
+                } else {
+                    val c = gy * gridW + x / cell
+                    candidate[i] = if (paperShare[c] <= 0.15f) {
+                        true // not paper at all (hand, object, background): one solid region
+                    } else {
+                        val dr = r - localR[c]
+                        val dg = g - localG[c]
+                        val db = b - localB[c]
+                        dr * dr + dg * dg + db * db > paperDeviation * paperDeviation
+                    }
+                }
+            }
+        }
 
-            var holeCount = max(1, (area / holeArea).roundToInt())
-            // Two overlapping holes cover less than twice the area of one, but the blob is elongated.
-            if (holeCount == 1 && length > 1.5 * thickness && length > 1.6 * holeDiameter) holeCount = 2
-            if (holeCount > MAX_HOLES_PER_BLOB) continue
-            if (length > (1.3 * holeCount + 0.3) * holeDiameter) continue
+        val impacts = ArrayList<Offset>()
+        fun accept(blob: Blob, pixels: IntArray, singleArea: Float) {
+            if (abs(blob.x - centerX) > cardHalfSize || abs(blob.y - centerY) > cardHalfSize) return
+            classify(blob, pixels, singleArea, width, height, impacts)
+        }
 
-            if (holeCount == 1) {
-                impacts.add(Offset((meanX / width).toFloat(), (meanY / height).toFloat()))
+        // 4. Reactive target: each impact is a yellow halo, much larger than the hole itself.
+        val reactive = hasVisual && visualPixels > 0 && yellowInVisual > visualPixels * 0.004f
+        var bare = candidate
+        if (reactive) {
+            val reach = max(1, (5f * pxPerMm).roundToInt())
+            val nearYellow = dilate(yellow, width, height, reach)
+            val halo = BooleanArray(n) { yellow[it] || (nearYellow[it] && inVisual[it] && candidate[it]) }
+            val haloBlobs = findBlobs(
+                halo, width, height, max(1, (2f * pxPerMm).roundToInt()), luma, inVisual,
+                inkLike, paperFloor, whiteLike, centerX, centerY, minArea = (PI * square(2.5f * pxPerMm)).toInt()
+            )
+            val haloArea = typicalArea(haloBlobs.list, areaOf(5f * pxPerMm), areaOf(30f * pxPerMm))
+            if (haloArea != null) haloBlobs.list.forEach { accept(it, haloBlobs.pixels, haloArea) }
+            bare = BooleanArray(n) { candidate[it] && !nearYellow[it] }
+        }
+
+        // 5. Plain holes. A first pass with a small opening measures the size of a hole; the
+        //    second pass uses an opening sized on the holes, which erases digits and thick lines.
+        val minDiameterMm = params.caliberMm?.let { it * 0.6f } ?: 3.5f
+        val maxDiameterMm = params.caliberMm?.let { it * 1.6f } ?: 14f
+        val smallest = areaOf(minDiameterMm * pxPerMm)
+        val firstPass = findBlobs(
+            bare, width, height, max(1, (0.75f * pxPerMm).roundToInt()), luma, inVisual,
+            inkLike, paperFloor, whiteLike, centerX, centerY, minArea = (smallest * 0.3f).toInt()
+        )
+        val inside = firstPass.list.filter { it.inVisual }
+        val outside = firstPass.list.filter { !it.inVisual }
+        // On a reactive target the plain marks left inside the visual are mostly halo leftovers:
+        // measure the holes on the paper instead.
+        var areaInVisual = if (reactive) null else typicalArea(inside, smallest, areaOf(maxDiameterMm * pxPerMm), minCount = 3)
+        // On paper the torn rim and its shadow are part of the mark, so it is somewhat larger.
+        var areaOnPaper = if (areaInVisual != null) {
+            typicalArea(outside, areaInVisual * 0.8f, areaInVisual * 2.6f) ?: areaInVisual * 1.5f
+        } else {
+            typicalArea(outside, smallest, areaOf(maxDiameterMm * 1.5f * pxPerMm), minCount = 3)
+        }
+        if (areaInVisual == null && areaOnPaper == null) {
+            // Too few isolated holes to measure: fall back on any round blob, then on the caliber.
+            areaInVisual = typicalArea(inside, smallest, areaOf(maxDiameterMm * pxPerMm))
+            areaOnPaper = typicalArea(outside, smallest, areaOf(maxDiameterMm * 1.5f * pxPerMm))
+            if (areaInVisual == null && areaOnPaper == null) {
+                areaInVisual = params.caliberMm?.let { areaOf(it * 0.9f * pxPerMm) }
+            }
+        }
+        val holeAreaInVisual = areaInVisual ?: areaOnPaper?.div(1.5f) ?: return impacts
+        val holeAreaOnPaper = areaOnPaper ?: holeAreaInVisual * 1.5f
+
+        val holeDiameter = 2f * sqrt(holeAreaInVisual / PI.toFloat())
+        val secondPass = findBlobs(
+            bare, width, height, max(1, (holeDiameter * 0.225f).roundToInt()), luma, inVisual,
+            inkLike, paperFloor, whiteLike, centerX, centerY, minArea = (holeAreaInVisual * 0.3f).toInt()
+        )
+        for (blob in secondPass.list) {
+            if (blob.inVisual) {
+                // White print where a ring number is expected.
+                if (blob.whiteShare > 0.3f && onDigit(blob, params, centerX, centerY, pxPerMm)) continue
+                accept(blob, secondPass.pixels, holeAreaInVisual)
             } else {
-                splitCluster(queue, area, width, height, holeCount, holeDiameter, impacts)
+                // Dark print where a ring number is expected.
+                if (blob.darkShare > 0.5f && !looksLikeOneHole(blob, holeAreaOnPaper) &&
+                    onDigit(blob, params, centerX, centerY, pxPerMm)
+                ) continue
+                // Black that sticks out of the visual: a sticker on its edge.
+                if (blob.inkShare > 0.6f && hasVisual && blob.minCenterDistance - visualRadius < 1.5f * pxPerMm) continue
+                accept(blob, secondPass.pixels, holeAreaOnPaper)
             }
         }
         return impacts
@@ -209,9 +301,182 @@ object ImpactDetector {
         }
     }
 
+    /** Counts the holes of a blob from the size of a single one, and adds their centers. */
+    private fun classify(blob: Blob, pixels: IntArray, singleArea: Float, width: Int, height: Int, out: MutableList<Offset>) {
+        if (blob.area < singleArea * 0.35f) return
+        val diameter = 2f * sqrt(singleArea / PI.toFloat())
+        if (blob.thickness < diameter * 0.5f) return
+
+        var count = max(1, (blob.area / singleArea).roundToInt())
+        // Two overlapping holes cover less than twice the area of one, but the blob is elongated.
+        if (count == 1 && blob.elongation > 1.5f && blob.length > diameter * 1.6f) count = 2
+        if (count > MAX_HOLES_PER_BLOB) return
+        // Much larger than a hole and perfectly round: a sticker.
+        if (blob.area > singleArea * 2.3f && blob.solidity > 0.93f && blob.elongation < 1.15f) return
+        if (blob.solidity < (if (count == 1) 0.7f else 0.45f)) return
+        if (blob.length > (1.3f * count + 0.3f) * diameter) return
+
+        if (count == 1) {
+            out.add(Offset(blob.x / width, blob.y / height))
+        } else {
+            splitCluster(pixels, blob.start, blob.area, width, height, count, diameter, out)
+        }
+    }
+
+    /** A clean, round, hole-sized blob: kept even where a digit is printed. */
+    private fun looksLikeOneHole(blob: Blob, singleArea: Float): Boolean =
+        blob.solidity > 0.88f && blob.elongation < 1.3f && blob.area > singleArea * 0.6f && blob.area < singleArea * 1.6f
+
+    /** Whether the blob sits where a ring number is printed. */
+    private fun onDigit(blob: Blob, params: ImpactDetectionParams, centerX: Float, centerY: Float, pxPerMm: Float): Boolean {
+        if (params.digitRadiiMm.isEmpty()) return false
+        val dx = abs(blob.x - centerX) / pxPerMm
+        val dy = abs(blob.y - centerY) / pxPerMm
+        // Digits are printed along the two axes through the center.
+        val along = max(dx, dy)
+        val across = min(dx, dy)
+        if (across > 12f) return false
+        return params.digitRadiiMm.any { abs(along - it) < 12f }
+    }
+
+    /**
+     * Median area of the blobs that look like one isolated hole, or null if there are too few.
+     * A plain median: stickers and merged holes are larger but rarer than single holes.
+     */
+    private fun typicalArea(blobs: List<Blob>, minArea: Float, maxArea: Float, minCount: Int = 1): Float? {
+        val areas = blobs
+            .filter { it.solidity > 0.85f && it.elongation < 1.35f && it.area >= minArea && it.area <= maxArea }
+            .map { it.area.toFloat() }
+            .sorted()
+        if (areas.size < minCount) return null
+        return areas[areas.size / 2]
+    }
+
+    /**
+     * Opens the mask (erasing anything thinner than `2 * opening + 1` pixels), then groups what is
+     * left into 8-connected blobs and measures them.
+     */
+    private fun findBlobs(
+        source: BooleanArray,
+        width: Int,
+        height: Int,
+        opening: Int,
+        luma: FloatArray,
+        inVisual: BooleanArray,
+        inkLike: Float,
+        darkLike: Float,
+        whiteLike: Float,
+        centerX: Float,
+        centerY: Float,
+        minArea: Int
+    ): Blobs {
+        val n = width * height
+        val mask = source.copyOf()
+        val scratch = BooleanArray(n)
+        val window = 2 * opening + 1
+        boxPass(mask, scratch, width, height, opening, horizontal = true, required = window)
+        boxPass(scratch, mask, width, height, opening, horizontal = false, required = window)
+        boxPass(mask, scratch, width, height, opening, horizontal = true, required = 1)
+        boxPass(scratch, mask, width, height, opening, horizontal = false, required = 1)
+
+        // Blob pixels are stored back to back in one buffer: a pixel belongs to at most one blob.
+        val pixels = IntArray(n)
+        val blobs = ArrayList<Blob>()
+        var stored = 0
+        // Blobs covering a large part of the photo (background, hand, the paper's surroundings)
+        // are measured but never kept.
+        val maxArea = n / 8
+
+        for (seed in 0 until n) {
+            if (!mask[seed]) continue
+            val start = stored
+            var head = start
+            var tail = start
+            pixels[tail++] = seed
+            mask[seed] = false
+            var sumX = 0.0
+            var sumY = 0.0
+            var sumXX = 0.0
+            var sumYY = 0.0
+            var sumXY = 0.0
+            var inkCount = 0
+            var darkCount = 0
+            var whiteCount = 0
+            var visualCount = 0
+            var minDistSq = Float.MAX_VALUE
+
+            while (head < tail) {
+                val p = pixels[head++]
+                val px = p % width
+                val py = p / width
+                sumX += px
+                sumY += py
+                sumXX += px.toDouble() * px
+                sumYY += py.toDouble() * py
+                sumXY += px.toDouble() * py
+                val l = luma[p]
+                if (l < inkLike) inkCount++
+                if (l < darkLike) darkCount++
+                if (l > whiteLike) whiteCount++
+                if (inVisual[p]) visualCount++
+                val distSq = square(px - centerX) + square(py - centerY)
+                if (distSq < minDistSq) minDistSq = distSq
+
+                val yStart = if (py > 0) py - 1 else 0
+                val yEnd = if (py < height - 1) py + 1 else py
+                val xStart = if (px > 0) px - 1 else 0
+                val xEnd = if (px < width - 1) px + 1 else px
+                for (ny in yStart..yEnd) {
+                    val nRow = ny * width
+                    for (nx in xStart..xEnd) {
+                        val q = nRow + nx
+                        if (mask[q]) {
+                            mask[q] = false
+                            pixels[tail++] = q
+                        }
+                    }
+                }
+            }
+
+            val area = tail - start
+            if (area < minArea || area > maxArea) continue // buffer space is reused
+
+            val meanX = sumX / area
+            val meanY = sumY / area
+            val varX = sumXX / area - meanX * meanX + 1.0 / 12.0
+            val varY = sumYY / area - meanY * meanY + 1.0 / 12.0
+            val covXY = sumXY / area - meanX * meanY
+            val halfTrace = (varX + varY) / 2.0
+            val spread = sqrt(square((varX - varY) / 2.0) + covXY * covXY)
+            val sigmaMajor = sqrt(halfTrace + spread)
+            val sigmaMinor = sqrt(max(halfTrace - spread, 1.0 / 12.0))
+            blobs.add(
+                Blob(
+                    start = start,
+                    area = area,
+                    x = meanX.toFloat(),
+                    y = meanY.toFloat(),
+                    // 1.0 for a filled disc or ellipse, much lower for outlines and ragged shapes
+                    solidity = (area / (4.0 * PI * sigmaMajor * sigmaMinor)).toFloat(),
+                    elongation = (sigmaMajor / sigmaMinor).toFloat(),
+                    length = (4.0 * sigmaMajor).toFloat(),
+                    thickness = (4.0 * sigmaMinor).toFloat(),
+                    inVisual = visualCount * 2 > area,
+                    inkShare = inkCount.toFloat() / area,
+                    darkShare = darkCount.toFloat() / area,
+                    whiteShare = whiteCount.toFloat() / area,
+                    minCenterDistance = sqrt(minDistSq)
+                )
+            )
+            stored = tail
+        }
+        return Blobs(blobs, pixels)
+    }
+
     /** Splits a blob made of overlapping holes into [count] centers with k-means. */
     private fun splitCluster(
         pixels: IntArray,
+        start: Int,
         pixelCount: Int,
         width: Int,
         height: Int,
@@ -221,11 +486,12 @@ object ImpactDetector {
     ) {
         val cx = DoubleArray(count)
         val cy = DoubleArray(count)
+        val end = start + pixelCount
 
         // Deterministic farthest-point initialization.
         var meanX = 0.0
         var meanY = 0.0
-        for (i in 0 until pixelCount) {
+        for (i in start until end) {
             meanX += pixels[i] % width
             meanY += pixels[i] / width
         }
@@ -233,7 +499,7 @@ object ImpactDetector {
         meanY /= pixelCount
         for (k in 0 until count) {
             var best = -1.0
-            for (i in 0 until pixelCount) {
+            for (i in start until end) {
                 val x = (pixels[i] % width).toDouble()
                 val y = (pixels[i] / width).toDouble()
                 var d = if (k == 0) square(x - meanX) + square(y - meanY) else Double.MAX_VALUE
@@ -253,7 +519,7 @@ object ImpactDetector {
             sumX.fill(0.0)
             sumY.fill(0.0)
             members.fill(0)
-            for (i in 0 until pixelCount) {
+            for (i in start until end) {
                 val x = (pixels[i] % width).toDouble()
                 val y = (pixels[i] / width).toDouble()
                 var nearest = 0
@@ -287,23 +553,18 @@ object ImpactDetector {
         kept.forEach { out.add(Offset((cx[it] / width).toFloat(), (cy[it] / height).toFloat())) }
     }
 
-    /**
-     * Morphological opening of the candidate mask with a square of side `2 * halfSize + 1`:
-     * anything that cannot contain that square disappears, larger shapes are left unchanged.
-     */
-    private fun removeThinStructures(region: ByteArray, width: Int, height: Int, halfSize: Int) {
-        val size = width * height
-        val mask = BooleanArray(size) { region[it] != NOT_CANDIDATE }
-        val scratch = BooleanArray(size)
-        val window = 2 * halfSize + 1
-        // Erosion keeps a pixel when the whole window is set; dilation when any pixel of it is.
-        boxPass(mask, scratch, width, height, halfSize, horizontal = true, required = window)
-        boxPass(scratch, mask, width, height, halfSize, horizontal = false, required = window)
-        boxPass(mask, scratch, width, height, halfSize, horizontal = true, required = 1)
-        boxPass(scratch, mask, width, height, halfSize, horizontal = false, required = 1)
-        for (i in 0 until size) if (!mask[i]) region[i] = NOT_CANDIDATE
+    private fun dilate(source: BooleanArray, width: Int, height: Int, radius: Int): BooleanArray {
+        val scratch = BooleanArray(source.size)
+        val out = BooleanArray(source.size)
+        boxPass(source, scratch, width, height, radius, horizontal = true, required = 1)
+        boxPass(scratch, out, width, height, radius, horizontal = false, required = 1)
+        return out
     }
 
+    /**
+     * One pass of a box filter on a mask: a pixel is set when at least [required] pixels of the
+     * window centered on it are set (the whole window for an erosion, one pixel for a dilation).
+     */
     private fun boxPass(
         src: BooleanArray,
         dst: BooleanArray,
@@ -342,6 +603,12 @@ object ImpactDetector {
         return 255f
     }
 
+    // A photo without color information is treated as gray.
+    private fun red(argb: IntArray?, luma: FloatArray, i: Int) = if (argb != null) ((argb[i] shr 16) and 0xFF).toFloat() else luma[i]
+    private fun green(argb: IntArray?, luma: FloatArray, i: Int) = if (argb != null) ((argb[i] shr 8) and 0xFF).toFloat() else luma[i]
+    private fun blue(argb: IntArray?, luma: FloatArray, i: Int) = if (argb != null) (argb[i] and 0xFF).toFloat() else luma[i]
+
+    private fun areaOf(diameter: Float) = (PI * diameter * diameter / 4.0).toFloat()
     private fun square(v: Float) = v * v
     private fun square(v: Double) = v * v
 }

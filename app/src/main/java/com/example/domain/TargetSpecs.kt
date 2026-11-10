@@ -3,12 +3,15 @@ package com.example.domain
 /**
  * Physical dimensions of the supported targets.
  *
+ * @property digitRadiiMm distances from the center at which ring numbers are printed, along the
+ *   horizontal and vertical axes
  * @property blackVisualDiameterMm diameter of the black visual; 0 when the target has none
  * @property cardSizeMm side of the (square) target card, or null when unknown
  */
 data class TargetSpec(
     val blackVisualDiameterMm: Float,
-    val cardSizeMm: Float?
+    val cardSizeMm: Float?,
+    val digitRadiiMm: List<Float> = emptyList()
 )
 
 object TargetSpecs {
@@ -17,7 +20,8 @@ object TargetSpecs {
         targetType.contains("Carabine 10m") -> TargetSpec(30.5f, 80f)
         targetType.contains("Pistolet 10m") -> TargetSpec(59.5f, 170f)
         targetType.contains("C200") -> TargetSpec(400f, 800f)
-        targetType.contains("C50") -> TargetSpec(200f, 500f)
+        // Rings every 25 mm, numbered 1 to 9 in the middle of each zone.
+        targetType.contains("C50") -> TargetSpec(200f, 500f, List(9) { 37.5f + 25f * it })
         targetType.contains("IPSC") -> TargetSpec(0f, null)
         else -> null
     }
