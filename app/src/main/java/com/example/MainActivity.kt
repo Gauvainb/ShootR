@@ -124,6 +124,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -333,8 +336,11 @@ fun TirTrackerApp() {
     val impactsList = remember { mutableStateListOf<ScreenImpact>() }
 
     // 5. Shot Score Adjustment (Ajustement des points a posteriori)
-    var impactUnderEdit by remember { mutableStateOf<ScreenImpact?>(null) }
-    var showImpactEditDialog by remember { mutableStateOf(false) }
+    // Impact being corrected on the target, and how it was before (to cancel).
+    var selectedImpactIndex by remember { mutableStateOf<Int?>(null) }
+    var selectedImpactOriginal by remember { mutableStateOf<ScreenImpact?>(null) }
+    val shootingScroll = rememberScrollState()
+    var canvasTopInColumnPx by remember { mutableFloatStateOf(0f) }
 
     // Calculate score automatically based on distance from target center
     fun computeScoreForImpact(realMm: Impact, targetType: String): Pair<Int, Boolean> {
@@ -609,9 +615,45 @@ fun TirTrackerApp() {
         }
     }
 
+    // Zooms the target so that a point of it (target coordinates) sits in the middle of the view.
+    fun zoomOn(point: Offset, zoom: Float) {
+        scale = zoom
+        offset = Offset(canvasWidthPx / 2f - point.x * zoom, canvasHeightPx / 2f - point.y * zoom)
+    }
+
+    // Puts an impact at a point of the target; its score follows from where it now is.
+    fun moveImpact(idx: Int, point: Offset) {
+        if (idx !in impactsList.indices) return
+        val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+        val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
+        val realMm = Impact((point.x - center.x) / pxMm, (center.y - point.y) / pxMm)
+        val (sc, inner) = computeScoreForImpact(realMm, targetTypeInput)
+        impactsList[idx] = impactsList[idx].copy(isAuto = false, canvasOffset = point, realMm = realMm, score = sc, isInnerTen = inner)
+    }
+
+    // Starts correcting an impact on the target: zoom on it, so its hole is visible.
+    fun selectImpact(idx: Int) {
+        if (idx !in impactsList.indices) return
+        selectedImpactIndex = idx
+        selectedImpactOriginal = impactsList[idx]
+        zoomOn(impactsList[idx].canvasOffset, maxOf(scale, 3f))
+    }
+
+    // Ends the correction, keeping the changes or restoring the impact as it was.
+    fun endImpactEdit(keep: Boolean) {
+        val idx = selectedImpactIndex
+        val original = selectedImpactOriginal
+        if (!keep && idx != null && original != null && idx in impactsList.indices) impactsList[idx] = original
+        selectedImpactIndex = null
+        selectedImpactOriginal = null
+        scale = 1f
+        offset = Offset.Zero
+    }
+
     // Moves to a step. The target step is the only one where the calibration can change, the
     // impacts step the only one where impacts are placed or detected.
     fun goToStep(step: ShootingStep) {
+        if (selectedImpactIndex != null) endImpactEdit(keep = true)
         shootingStep = step
         when (step) {
             ShootingStep.SESSION -> Unit
@@ -647,6 +689,7 @@ fun TirTrackerApp() {
             selectedImageUri = if (imgUriStr.isNotBlank()) Uri.parse(imgUriStr) else null
             // Calibration is not saved with a session: what is on screen belongs to another photo.
             resetPhotoAnalysis()
+            endImpactEdit(keep = true)
 
             // Reconstruct impacts
             impactsList.clear()
@@ -751,131 +794,6 @@ fun TirTrackerApp() {
         } catch (e: Exception) {
             Toast.makeText(context, "Erreur : ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    // DIALOG: Correction d'un coup. Les points ne se saisissent pas : ils découlent de la position.
-    if (showImpactEditDialog && impactUnderEdit != null) {
-        val shot = impactUnderEdit!!
-        var isFlyer by remember(shot) { mutableStateOf(shot.isFlyer) }
-        var deltaXMm by remember(shot) { mutableFloatStateOf(shot.realMm.xMm) }
-        var deltaYMm by remember(shot) { mutableFloatStateOf(shot.realMm.yMm) }
-        val (autoScore, autoInner) = computeScoreForImpact(Impact(deltaXMm, deltaYMm), targetTypeInput)
-        val scoreColor = when {
-            autoInner -> Color(0xFF10B981)
-            autoScore >= 9 -> Color(0xFFFBBF24)
-            else -> MaterialTheme.colorScheme.primary
-        }
-
-        AlertDialog(
-            onDismissRequest = { showImpactEditDialog = false },
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            title = { Text("Coup n° ${shot.index}", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Score, computed from the position
-                    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Points", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text(
-                                    text = "Selon la zone touchée, à ${String.format(Locale.FRANCE, "%.0f", hypot(deltaXMm, deltaYMm))} mm du centre",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Text(
-                                text = if (autoInner) "10X" else "$autoScore",
-                                fontSize = 34.sp,
-                                fontWeight = FontWeight.Black,
-                                color = scoreColor,
-                                modifier = Modifier.padding(start = 12.dp)
-                            )
-                        }
-                    }
-
-                    // Nudge the position by 1 mm
-                    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "Recaler l'impact (1 mm par appui)",
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        NudgeButton(Icons.Default.ArrowUpward, "Haut") { deltaYMm += 1f }
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            NudgeButton(Icons.AutoMirrored.Filled.ArrowBack, "Gauche") { deltaXMm -= 1f }
-                            Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.AdsClick, contentDescription = null, tint = scoreColor, modifier = Modifier.size(24.dp))
-                            }
-                            NudgeButton(Icons.AutoMirrored.Filled.ArrowForward, "Droite") { deltaXMm += 1f }
-                        }
-                        NudgeButton(Icons.Default.ArrowDownward, "Bas") { deltaYMm -= 1f }
-                    }
-
-                    // Flyer / Coup de doigt exclusion
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Coup de doigt", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                            Text("Exclu du groupement, mais compté dans les points", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(checked = isFlyer, onCheckedChange = { isFlyer = it })
-                    }
-
-                    // Delete specific shot
-                    OutlinedButton(
-                        onClick = {
-                            val idx = impactsList.indexOfFirst { it.index == shot.index }
-                            if (idx >= 0) {
-                                impactsList.removeAt(idx)
-                                val reindexed = impactsList.mapIndexed { i, s -> s.copy(index = i + 1) }
-                                impactsList.clear()
-                                impactsList.addAll(reindexed)
-                                Toast.makeText(context, "Coup n° ${shot.index} supprimé.", Toast.LENGTH_SHORT).show()
-                            }
-                            showImpactEditDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Supprimer cet impact", fontSize = 15.sp)
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val idx = impactsList.indexOfFirst { it.index == shot.index }
-                        if (idx >= 0) {
-                            val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                            val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
-                            impactsList[idx] = shot.copy(
-                                isAuto = false,
-                                score = autoScore,
-                                isInnerTen = autoInner,
-                                isFlyer = isFlyer,
-                                realMm = Impact(deltaXMm, deltaYMm),
-                                canvasOffset = Offset(center.x + deltaXMm * pxMm, center.y - deltaYMm * pxMm)
-                            )
-                        }
-                        showImpactEditDialog = false
-                    },
-                    modifier = Modifier.heightIn(min = 48.dp)
-                ) {
-                    Text("Valider", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showImpactEditDialog = false }, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text("Annuler", fontSize = 15.sp)
-                }
-            }
-        )
     }
 
     // DIALOG: Graphique d'évolution MOA
@@ -1035,7 +953,7 @@ fun TirTrackerApp() {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(shootingScroll)
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                         .testTag("shooting_range_container"),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -1281,6 +1199,11 @@ fun TirTrackerApp() {
                                             draggedImpactIndex = tappedImpactIdx
                                             draggedImpactIndexState = tappedImpactIdx
                                             activeDragTarget = "EXISTING_IMPACT"
+                                        } else if (selectedImpactIndex != null) {
+                                            // Correcting an impact: touching the photo puts it there.
+                                            draggedImpactIndex = selectedImpactIndex
+                                            draggedImpactIndexState = selectedImpactIndex
+                                            activeDragTarget = "MOVE_SELECTED"
                                         } else {
                                             activeDragTarget = "NEW_IMPACT"
                                             val center = currentCenter
@@ -1388,7 +1311,7 @@ fun TirTrackerApp() {
                                                     val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
                                                     val scoreLabel = if (inner) "10 Mouche" else "$sc pts"
 
-                                                    if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
+                                                    if ((activeDragTarget == "EXISTING_IMPACT" || activeDragTarget == "MOVE_SELECTED") && draggedImpactIndex != null) {
                                                         val idx = draggedImpactIndex!!
                                                         impactsList[idx] = impactsList[idx].copy(
                                                             isAuto = false,
@@ -1449,23 +1372,16 @@ fun TirTrackerApp() {
                                                 val realImp = Impact(xMm, yMm)
                                                 val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
 
-                                                if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
+                                                if (activeDragTarget == "MOVE_SELECTED" && draggedImpactIndex != null) {
+                                                    // Touch or drag on the photo: the corrected impact goes there.
+                                                    moveImpact(draggedImpactIndex!!, upLocalPoint)
+                                                } else if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
                                                     val idx = draggedImpactIndex!!
                                                     if (totalMove < 12f) {
-                                                        // Tap court sans déplacement : ouvre le dialogue d'ajustement
-                                                        impactUnderEdit = impactsList[idx]
-                                                        showImpactEditDialog = true
+                                                        // Short tap: correct this impact on the target.
+                                                        if (selectedImpactIndex != idx) selectImpact(idx)
                                                     } else {
-                                                        // Déplacement finalisé par glissement
-                                                        impactsList[idx] = impactsList[idx].copy(
-                                                            isAuto = false,
-                                                            canvasOffset = upLocalPoint,
-                                                            realMm = realImp,
-                                                            score = sc,
-                                                            isInnerTen = inner
-                                                        )
-                                                        val label = if (inner) "10 Mouche" else "$sc pts"
-                                                        Toast.makeText(context, "Coup #${impactsList[idx].index} ajusté ($label) !", Toast.LENGTH_SHORT).show()
+                                                        moveImpact(idx, upLocalPoint)
                                                     }
                                                 } else {
                                                     // Nouvel impact positionné au tap ou au glissement
@@ -1488,6 +1404,7 @@ fun TirTrackerApp() {
                                 }
                             }
                             .testTag("target_photo_canvas")
+                            .onGloballyPositioned { canvasTopInColumnPx = it.positionInParent().y }
                     ) {
                         val currentWidthPx = constraints.maxWidth.toFloat()
                         val currentHeightPx = constraints.maxHeight.toFloat()
@@ -1543,7 +1460,8 @@ fun TirTrackerApp() {
 
                                 // Centre de la cible (croix et réticule vert)
                                 // Overlay sizes in dp, so markers keep the same physical size on every screen.
-                                val k = 0.75f * density
+                                // Divided by the zoom, so markers keep their size on screen when zooming in.
+                                val k = 0.75f * density / scale
                                 val r = 18f * k
                                 drawCircle(color = Color(0xFF10B981).copy(alpha = 0.35f), radius = r + 6f * k, center = center)
                                 drawCircle(color = Color(0xFF10B981), radius = r, center = center, style = Stroke(width = 2.5f * k))
@@ -1586,10 +1504,13 @@ fun TirTrackerApp() {
 
                                         val label = "${selectedCalibrationRef.diameterMm.toInt()} mm (${selectedCalibrationRef.shortName})"
                                         val textLayout = textMeasurer.measure(label, style = calibrationLabelStyle)
-                                        drawText(
-                                            textLayoutResult = textLayout,
-                                            topLeft = Offset(center.x - textLayout.size.width / 2f, center.y - visualRadiusPx - textLayout.size.height - 6f)
-                                        )
+                                        val labelAnchor = Offset(center.x, center.y - visualRadiusPx - 6f * k)
+                                        withTransform({ scale(1f / scale, 1f / scale, pivot = labelAnchor) }) {
+                                            drawText(
+                                                textLayoutResult = textLayout,
+                                                topLeft = Offset(labelAnchor.x - textLayout.size.width / 2f, labelAnchor.y - textLayout.size.height)
+                                            )
+                                        }
                                     } else {
                                         // Anneau discret en mode tir
                                         drawCircle(
@@ -1633,10 +1554,29 @@ fun TirTrackerApp() {
 
                                 // Dessin des impacts avec numérotation
                                 val radius = 13f * k
+                                val editing = selectedImpactIndex
                                 impactsList.forEachIndexed { idx, imp ->
                                     val pos = imp.canvasOffset
                                     val isLatest = idx == impactsList.lastIndex
                                     val isBeingDragged = draggedImpactIndexState == idx
+
+                                    if (idx == editing) {
+                                        // Being corrected: a thin ring and a cross with an open middle, so the
+                                        // hole on the photo stays visible right where the impact is.
+                                        val ring = Color(0xFF22D3EE)
+                                        drawCircle(color = Color.Black.copy(alpha = 0.6f), radius = radius * 1.6f, center = pos, style = Stroke(width = 3.5f * k))
+                                        drawCircle(color = ring, radius = radius * 1.6f, center = pos, style = Stroke(width = 2f * k))
+                                        val gap = radius * 0.45f
+                                        val arm = radius * 2.6f
+                                        listOf(Offset(1f, 0f), Offset(-1f, 0f), Offset(0f, 1f), Offset(0f, -1f)).forEach { d ->
+                                            val from = pos + d * gap
+                                            val to = pos + d * arm
+                                            drawLine(color = Color.Black.copy(alpha = 0.6f), start = from, end = to, strokeWidth = 3.5f * k)
+                                            drawLine(color = ring, start = from, end = to, strokeWidth = 1.6f * k)
+                                        }
+                                        return@forEachIndexed
+                                    }
+                                    val fade = if (editing != null) 0.45f else 1f
 
                                     if (isBeingDragged) {
                                         // Réticule et halo d'ajustement en temps réel pour l'impact déplacé
@@ -1646,7 +1586,7 @@ fun TirTrackerApp() {
                                         drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f * k)
                                     }
 
-                                    drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = radius + 2f * k, center = Offset(pos.x + 1f * k, pos.y + 1f * k))
+                                    drawCircle(color = Color.Black.copy(alpha = 0.5f * fade), radius = radius + 2f * k, center = Offset(pos.x + 1f * k, pos.y + 1f * k))
                                     val impactColor = when {
                                         imp.isFlyer -> Color(0xFF6B7280) // Flyer grisé
                                         imp.isInnerTen -> Color(0xFF10B981) // Mouche verte
@@ -1654,9 +1594,9 @@ fun TirTrackerApp() {
                                         isLatest || isBeingDragged -> Color(0xFFFF3B30)
                                         else -> Color(0xFFDC2626)
                                     }
-                                    drawCircle(color = impactColor, radius = radius, center = pos)
-                                    drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = (if (isBeingDragged) 2.8f else 2f) * k))
-                                    if (imp.isAuto) {
+                                    drawCircle(color = impactColor.copy(alpha = fade), radius = radius, center = pos)
+                                    drawCircle(color = Color.White.copy(alpha = fade), radius = radius, center = pos, style = Stroke(width = (if (isBeingDragged) 2.8f else 2f) * k))
+                                    if (imp.isAuto && editing == null) {
                                         // Detected automatically, not confirmed yet
                                         drawCircle(color = Color(0xFF38BDF8), radius = radius + 5f * k, center = pos, style = Stroke(width = 2f * k, pathEffect = autoImpactDash))
                                     }
@@ -1665,10 +1605,12 @@ fun TirTrackerApp() {
                                         imp.index.toString(),
                                         style = impactNumberStyle
                                     )
-                                    drawText(
-                                        textLayoutResult = numLayout,
-                                        topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
-                                    )
+                                    withTransform({ scale(1f / scale, 1f / scale, pivot = pos) }) {
+                                        drawText(
+                                            textLayoutResult = numLayout,
+                                            topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
+                                        )
+                                    }
                                 }
 
                                 // Dessin du nouvel impact en cours d'ajustement dynamique au doigt
@@ -1692,10 +1634,12 @@ fun TirTrackerApp() {
                                         newIdx.toString(),
                                         style = impactNumberStyle
                                     )
-                                    drawText(
-                                        textLayoutResult = numLayout,
-                                        topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
-                                    )
+                                    withTransform({ scale(1f / scale, 1f / scale, pivot = pos) }) {
+                                        drawText(
+                                            textLayoutResult = numLayout,
+                                            topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1727,7 +1671,9 @@ fun TirTrackerApp() {
                                             if (calibrationStep == CalibrationStep.SET_CENTER) "Touchez le centre de la cible"
                                             else "Glissez jusqu'au bord du visuel"
                                         AnnotationMode.TARGET_CENTER -> "Touchez ou glissez pour placer le centre"
-                                        AnnotationMode.IMPACT -> "Touchez pour placer un impact"
+                                        AnnotationMode.IMPACT ->
+                                            if (selectedImpactIndex != null) "Touchez le trou ou faites glisser l'impact"
+                                            else "Touchez pour placer un impact"
                                     }
                                     Text(
                                         text = modeText,
@@ -1831,6 +1777,28 @@ fun TirTrackerApp() {
                     }
                     } else {
                     // ÉTAPE 3 : LES IMPACTS
+                    val editedIndex = selectedImpactIndex
+                    if (editedIndex != null && editedIndex in impactsList.indices) {
+                        LaunchedEffect(editedIndex) { shootingScroll.animateScrollTo(canvasTopInColumnPx.toInt()) }
+                        ImpactEditPanel(
+                            shot = impactsList[editedIndex],
+                            onNudge = { dxMm, dyMm ->
+                                val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
+                                val current = impactsList[editedIndex].canvasOffset
+                                moveImpact(editedIndex, Offset(current.x + dxMm * pxMm, current.y - dyMm * pxMm))
+                            },
+                            onFlyerChange = { flyer -> impactsList[editedIndex] = impactsList[editedIndex].copy(isFlyer = flyer, isAuto = false) },
+                            onDelete = {
+                                endImpactEdit(keep = true)
+                                impactsList.removeAt(editedIndex)
+                                val reindexed = impactsList.mapIndexed { i, imp -> imp.copy(index = i + 1) }
+                                impactsList.clear()
+                                impactsList.addAll(reindexed)
+                            },
+                            onCancel = { endImpactEdit(keep = false) },
+                            onDone = { endImpactEdit(keep = true) }
+                        )
+                    } else {
                     // 5. IMPACTS ET POINTS
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -1883,10 +1851,7 @@ fun TirTrackerApp() {
                                                 }
                                             ),
                                             modifier = Modifier
-                                                .clickable {
-                                                    impactUnderEdit = imp
-                                                    showImpactEditDialog = true
-                                                }
+                                                .clickable { selectImpact(imp.index - 1) }
                                                 .testTag("shot_chip_${imp.index}")
                                         ) {
                                             Column(
@@ -2013,6 +1978,7 @@ fun TirTrackerApp() {
                         nextTag = "save_session_button",
                         nextIcon = Icons.Default.Save
                     )
+                    }
                     }
                     }
 
@@ -2550,5 +2516,81 @@ private fun TargetStatusCard(
 private fun NudgeButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
     FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(56.dp)) {
         Icon(icon, contentDescription = description, modifier = Modifier.size(26.dp))
+    }
+}
+
+/** Correction of one impact, under the zoomed target: the photo stays visible while it moves. */
+@Composable
+private fun ImpactEditPanel(
+    shot: ScreenImpact,
+    onNudge: (dxMm: Float, dyMm: Float) -> Unit,
+    onFlyerChange: (Boolean) -> Unit,
+    onDelete: () -> Unit,
+    onCancel: () -> Unit,
+    onDone: () -> Unit
+) {
+    val scoreColor = when {
+        shot.isInnerTen -> Color(0xFF10B981)
+        shot.score >= 9 -> Color(0xFFFBBF24)
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("impact_edit_panel"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Coup n° ${shot.index}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                    Text("Points selon la zone touchée", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(if (shot.isInnerTen) "10X" else "${shot.score}", fontSize = 32.sp, fontWeight = FontWeight.Black, color = scoreColor)
+            }
+
+            // Fine nudge, 1 mm per press
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                NudgeButton(Icons.AutoMirrored.Filled.ArrowBack, "Gauche de 1 mm") { onNudge(-1f, 0f) }
+                NudgeButton(Icons.Default.ArrowUpward, "Haut de 1 mm") { onNudge(0f, 1f) }
+                NudgeButton(Icons.Default.ArrowDownward, "Bas de 1 mm") { onNudge(0f, -1f) }
+                NudgeButton(Icons.AutoMirrored.Filled.ArrowForward, "Droite de 1 mm") { onNudge(1f, 0f) }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Coup de doigt (hors groupement)",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(checked = shot.isFlyer, onCheckedChange = onFlyerChange)
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(ActionHeight),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(imageVector = Icons.Default.Delete, contentDescription = "Supprimer cet impact", modifier = Modifier.size(24.dp))
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f).height(ActionHeight),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Annuler", fontSize = 15.sp)
+                }
+                Button(
+                    onClick = onDone,
+                    modifier = Modifier.weight(1f).height(ActionHeight).testTag("impact_edit_done"),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Terminé", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
     }
 }

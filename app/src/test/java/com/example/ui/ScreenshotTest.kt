@@ -112,7 +112,7 @@ class ScreenshotTest {
     }
 
     @Test
-    @Config(qualifiers = "w393dp-h2000dp-xxhdpi")
+    @Config(qualifiers = "w393dp-h852dp-xxhdpi")
     fun step3Impacts() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
         rule.onNodeWithTag("next_to_target_button").performClick()
@@ -123,7 +123,7 @@ class ScreenshotTest {
         }
         save("3_impacts")
         rule.onNodeWithTag("shot_chip_2").performClick()
-        saveDialog("3_coup")
+        save("3_coup")
     }
 
     @Test

@@ -23,7 +23,7 @@ On revient à une étape précédente avec « Retour » ou en touchant l'étape 
   - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés. Un impact qui touche un chiffre est conservé : un chiffre n'a que des traits fins, un impact a un cœur plein.
   - Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter » de la carte Impacts relance la recherche sans dupliquer ceux déjà placés.
 - **Score automatique** selon le type de cible (C50, pistolet 10 m, carabine 10 m, C200), avec mouches (10X).
-- **Correction coup par coup** : recalage au millimètre, exclusion des coups de doigt du groupement, suppression. Les points ne se saisissent pas : ils sont toujours calculés d'après la zone touchée.
+- **Correction coup par coup, sur la photo** : toucher un coup zoome la cible dessus ; l'impact s'affiche alors en croix ajourée pour laisser voir le trou. On le fait glisser, on touche l'endroit exact du trou, ou on le recale au millimètre. On peut aussi l'exclure du groupement (coup de doigt) ou le supprimer. Les points ne se saisissent pas : ils sont toujours calculés d'après la zone touchée.
 - **Télémétrie du groupement** : écart extrême (ES), hauteur, largeur, H+L, MOA et dérive du point moyen d'impact.
 - **Historique** : recherche, filtre par distance, réouverture d'une séance pour la corriger.
 - **Évolution de la précision** : graphique du MOA par séance (courbe ou histogramme), filtrable par arme.
