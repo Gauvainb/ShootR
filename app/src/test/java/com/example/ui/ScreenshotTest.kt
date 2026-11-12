@@ -122,6 +122,8 @@ class ScreenshotTest {
             canvas.performTouchInput { click(Offset(width * x, height * y)) }
         }
         save("3_impacts")
+        rule.onNodeWithTag("shot_chip_2").performClick()
+        saveDialog("3_coup")
     }
 
     @Test

@@ -87,6 +87,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -752,172 +753,97 @@ fun TirTrackerApp() {
         }
     }
 
-    // DIALOG: Ajustement des points a posteriori pour un coup spécifique
+    // DIALOG: Correction d'un coup. Les points ne se saisissent pas : ils découlent de la position.
     if (showImpactEditDialog && impactUnderEdit != null) {
         val shot = impactUnderEdit!!
-        var currentScore by remember(shot) { mutableIntStateOf(shot.score) }
-        var isInnerTen by remember(shot) { mutableStateOf(shot.isInnerTen) }
         var isFlyer by remember(shot) { mutableStateOf(shot.isFlyer) }
         var deltaXMm by remember(shot) { mutableFloatStateOf(shot.realMm.xMm) }
         var deltaYMm by remember(shot) { mutableFloatStateOf(shot.realMm.yMm) }
+        val (autoScore, autoInner) = computeScoreForImpact(Impact(deltaXMm, deltaYMm), targetTypeInput)
+        val scoreColor = when {
+            autoInner -> Color(0xFF10B981)
+            autoScore >= 9 -> Color(0xFFFBBF24)
+            else -> MaterialTheme.colorScheme.primary
+        }
 
         AlertDialog(
             onDismissRequest = { showImpactEditDialog = false },
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Ajuster le coup #${shot.index}", fontWeight = FontWeight.Bold)
-                    }
-                    Surface(
-                        shape = CircleShape,
-                        color = if (isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.primary
-                    ) {
-                        Text(
-                            text = if (isInnerTen) "10X" else "$currentScore pts",
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Black,
-                            color = Color.White
-                        )
-                    }
-                }
-            },
+            title = { Text("Coup n° ${shot.index}", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "Ajustez rétroactivement les points attribués, la zone de cordon ou la position de l'impact :",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    // 1. Score Buttons Grid
-                    Text("Attribution des points :", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        // Mouche 10X
-                        FilterChip(
-                            selected = currentScore == 10 && isInnerTen,
-                            onClick = { currentScore = 10; isInnerTen = true },
-                            label = { Text("10X (Mouche)", fontWeight = FontWeight.Bold) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF10B981).copy(alpha = 0.3f), selectedLabelColor = Color(0xFF10B981))
-                        )
-                        // Standard numbers 10 to 0
-                        (10 downTo 0).forEach { sc ->
-                            FilterChip(
-                                selected = currentScore == sc && !isInnerTen,
-                                onClick = { currentScore = sc; isInnerTen = false },
-                                label = { Text(if (sc == 0) "0 (Paille)" else "$sc") }
+                    // Score, computed from the position
+                    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Points", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "Selon la zone touchée, à ${String.format(Locale.FRANCE, "%.0f", hypot(deltaXMm, deltaYMm))} mm du centre",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = if (autoInner) "10X" else "$autoScore",
+                                fontSize = 34.sp,
+                                fontWeight = FontWeight.Black,
+                                color = scoreColor,
+                                modifier = Modifier.padding(start = 12.dp)
                             )
                         }
                     }
 
-                    // 2. Cordon touché Quick Buttons
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                if (currentScore < 10) currentScore += 1
-                                Toast.makeText(context, "Cordon favorable (+1 pt)", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("+1 Cordon", fontSize = 12.sp)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                if (currentScore > 0) currentScore -= 1
-                                Toast.makeText(context, "Cordon défavorable (-1 pt)", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("-1 Cordon", fontSize = 12.sp)
-                        }
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    // 3. Nudge fine position (Recalage millimétrique)
-                    Text(
-                        text = "Recalage fin de la position (ΔX=${String.format(Locale.US, "%.1f", deltaXMm)} mm, ΔY=${String.format(Locale.US, "%.1f", deltaYMm)} mm) :",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { deltaXMm -= 1f }) {
-                            Icon(imageVector = Icons.Default.Navigation, contentDescription = "Gauche", modifier = Modifier.graphicsLayer { rotationZ = -90f })
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            IconButton(onClick = { deltaYMm += 1f }) {
-                                Icon(imageVector = Icons.Default.ArrowUpward, contentDescription = "Haut")
-                            }
-                            Text("1 mm", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            IconButton(onClick = { deltaYMm -= 1f }) {
-                                Icon(imageVector = Icons.Default.ArrowDownward, contentDescription = "Bas")
-                            }
-                        }
-                        IconButton(onClick = { deltaXMm += 1f }) {
-                            Icon(imageVector = Icons.Default.Navigation, contentDescription = "Droite", modifier = Modifier.graphicsLayer { rotationZ = 90f })
-                        }
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    // 4. Flyer / Coup de doigt exclusion
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Coup de doigt (Flyer)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text("Exclure de la dispersion MOA du groupement", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = isFlyer,
-                            onCheckedChange = { isFlyer = it }
+                    // Nudge the position by 1 mm
+                    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Recaler l'impact (1 mm par appui)",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.fillMaxWidth()
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        NudgeButton(Icons.Default.ArrowUpward, "Haut") { deltaYMm += 1f }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            NudgeButton(Icons.AutoMirrored.Filled.ArrowBack, "Gauche") { deltaXMm -= 1f }
+                            Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.AdsClick, contentDescription = null, tint = scoreColor, modifier = Modifier.size(24.dp))
+                            }
+                            NudgeButton(Icons.AutoMirrored.Filled.ArrowForward, "Droite") { deltaXMm += 1f }
+                        }
+                        NudgeButton(Icons.Default.ArrowDownward, "Bas") { deltaYMm -= 1f }
                     }
 
-                    // 5. Delete specific shot
+                    // Flyer / Coup de doigt exclusion
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Coup de doigt", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text("Exclu du groupement, mais compté dans les points", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = isFlyer, onCheckedChange = { isFlyer = it })
+                    }
+
+                    // Delete specific shot
                     OutlinedButton(
                         onClick = {
                             val idx = impactsList.indexOfFirst { it.index == shot.index }
                             if (idx >= 0) {
                                 impactsList.removeAt(idx)
-                                // re-index
                                 val reindexed = impactsList.mapIndexed { i, s -> s.copy(index = i + 1) }
                                 impactsList.clear()
                                 impactsList.addAll(reindexed)
-                                Toast.makeText(context, "Coup #${shot.index} supprimé.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Coup n° ${shot.index} supprimé.", Toast.LENGTH_SHORT).show()
                             }
                             showImpactEditDialog = false
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                     ) {
-                        Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Supprimer cet impact")
+                        Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Supprimer cet impact", fontSize = 15.sp)
                     }
                 }
             },
@@ -927,28 +853,26 @@ fun TirTrackerApp() {
                         val idx = impactsList.indexOfFirst { it.index == shot.index }
                         if (idx >= 0) {
                             val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                            val center = targetCenterPx ?: Offset(500f, 500f)
-                            val newCanvasOffset = Offset(center.x + deltaXMm * pxMm, center.y - deltaYMm * pxMm)
-
+                            val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
                             impactsList[idx] = shot.copy(
                                 isAuto = false,
-                                score = currentScore,
-                                isInnerTen = isInnerTen,
+                                score = autoScore,
+                                isInnerTen = autoInner,
                                 isFlyer = isFlyer,
                                 realMm = Impact(deltaXMm, deltaYMm),
-                                canvasOffset = newCanvasOffset
+                                canvasOffset = Offset(center.x + deltaXMm * pxMm, center.y - deltaYMm * pxMm)
                             )
-                            Toast.makeText(context, "Coup #${shot.index} ajusté ($currentScore pts) !", Toast.LENGTH_SHORT).show()
                         }
                         showImpactEditDialog = false
-                    }
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp)
                 ) {
-                    Text("Valider l'ajustement")
+                    Text("Valider", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showImpactEditDialog = false }) {
-                    Text("Annuler")
+                TextButton(onClick = { showImpactEditDialog = false }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Annuler", fontSize = 15.sp)
                 }
             }
         )
@@ -2619,5 +2543,12 @@ private fun TargetStatusCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NudgeButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
+    FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(56.dp)) {
+        Icon(icon, contentDescription = description, modifier = Modifier.size(26.dp))
     }
 }
