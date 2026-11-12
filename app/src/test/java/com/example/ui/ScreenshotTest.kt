@@ -7,6 +7,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import org.robolectric.Shadows
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import com.example.MainActivity
@@ -25,7 +30,7 @@ import java.io.File
  *
  *   SCREENSHOTS_OUT=/path/to/dir ./gradlew testDebugUnitTest --tests '*ScreenshotTest*'
  *
- * Skipped when SCREENSHOTS_OUT is not set.
+ * Skipped when SCREENSHOTS_OUT is not set. SCREENSHOTS_PHOTO adds the target step with a real photo.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -70,29 +75,53 @@ class ScreenshotTest {
 
     @Test
     @Config(qualifiers = "w393dp-h852dp-xxhdpi")
-    fun phone() {
+    fun step1Session() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
-        save("phone")
-    }
-
-    @Test
-    @Config(qualifiers = "w393dp-h2600dp-xxhdpi")
-    fun withImpacts() {
-        assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
-        val canvas = rule.onNodeWithTag("target_photo_canvas")
-        listOf(0.5f to 0.5f, 0.53f to 0.46f, 0.45f to 0.55f, 0.6f to 0.42f, 0.3f to 0.7f).forEach { (x, y) ->
-            canvas.performTouchInput { click(Offset(width * x, height * y)) }
-        }
-        save("impacts")
+        save("1_seance")
     }
 
     @Test
     @Config(qualifiers = "w393dp-h852dp-xxhdpi")
-    fun sessionSheet() {
+    fun step2TargetWithoutPhoto() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
-        rule.onNodeWithTag("session_characterization_card").performClick()
+        rule.onNodeWithTag("next_to_target_button").performClick()
+        save("2_cible_sans_photo")
+    }
+
+    /** Needs SCREENSHOTS_PHOTO: a real target photo, loaded through the photo picker. */
+    @Test
+    @Config(qualifiers = "w393dp-h1700dp-xxhdpi")
+    fun step2TargetWithPhoto() {
+        val photo = System.getenv("SCREENSHOTS_PHOTO")
+        assumeTrue(System.getenv("SCREENSHOTS_OUT") != null && photo != null)
+        rule.onNodeWithTag("next_to_target_button").performClick()
+        rule.onNodeWithTag("load_photo_button").performClick()
         rule.waitForIdle()
-        saveDialog("sheet")
+        val activity = Shadows.shadowOf(rule.activity)
+        val request = activity.nextStartedActivityForResult
+        activity.receiveResult(request.intent, Activity.RESULT_OK, Intent().setData(Uri.fromFile(File(photo!!))))
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithText("Cible repérée").fetchSemanticsNodes().isNotEmpty() ||
+                rule.onAllNodesWithText("Cible non repérée").fetchSemanticsNodes().isNotEmpty()
+        }
+        save("2_cible_photo")
+
+        rule.onNodeWithTag("next_to_impacts_button").performClick()
+        rule.waitUntil(60_000) { rule.onAllNodesWithText("Détection…").fetchSemanticsNodes().isEmpty() }
+        save("3_impacts_photo")
+    }
+
+    @Test
+    @Config(qualifiers = "w393dp-h2000dp-xxhdpi")
+    fun step3Impacts() {
+        assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
+        rule.onNodeWithTag("next_to_target_button").performClick()
+        rule.onNodeWithTag("next_to_impacts_button").performClick()
+        val canvas = rule.onNodeWithTag("target_photo_canvas")
+        listOf(0.5f to 0.5f, 0.6f to 0.4f, 0.4f to 0.6f, 0.65f to 0.62f, 0.3f to 0.7f).forEach { (x, y) ->
+            canvas.performTouchInput { click(Offset(width * x, height * y)) }
+        }
+        save("3_impacts")
     }
 
     @Test
@@ -100,14 +129,7 @@ class ScreenshotTest {
     fun history() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
         rule.onNodeWithText("Historique").performClick()
-        save("history")
+        save("historique")
     }
 
-    /** Tall window: the whole scrolling content at once. */
-    @Test
-    @Config(qualifiers = "w393dp-h2600dp-xxhdpi")
-    fun fullPage() {
-        assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
-        save("full")
-    }
 }

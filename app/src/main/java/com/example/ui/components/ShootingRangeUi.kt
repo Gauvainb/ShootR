@@ -201,3 +201,49 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, trailing: @Compo
         trailing()
     }
 }
+
+/** Progress through the steps of a session: done steps can be reopened, later ones cannot. */
+@Composable
+fun StepIndicator(
+    steps: List<String>,
+    currentIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        steps.forEachIndexed { index, label ->
+            val isCurrent = index == currentIndex
+            val isDone = index < currentIndex
+            val accent = MaterialTheme.colorScheme.primary
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(enabled = isDone) { onSelect(index) }
+                    .padding(vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().height(5.dp),
+                    shape = RoundedCornerShape(3.dp),
+                    color = when {
+                        isCurrent -> accent
+                        isDone -> accent.copy(alpha = 0.5f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ) {}
+                Text(
+                    text = "${index + 1}. $label",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                    color = when {
+                        isCurrent -> MaterialTheme.colorScheme.onSurface
+                        isDone -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.outline
+                    },
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}

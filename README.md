@@ -6,10 +6,18 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
 
 ## Fonctionnalités
 
+Une séance s'enregistre en trois étapes, chacune sur son propre écran :
+
+1. **Séance** : titre, type de cible, arme, calibre, distance, munitions.
+2. **Cible** : chargement de la photo, repérage automatique du visuel, puis vérification et réglage du centre et de l'échelle. C'est le seul écran où la calibration peut changer. On peut aussi continuer sans photo.
+3. **Impacts** : détection automatique à la première arrivée, correction coup par coup, score et groupement, enregistrement.
+
+On revient à une étape précédente avec « Retour » ou en touchant l'étape dans l'indicateur en haut.
+
 - **Pointage sur photo** : chargez la photo d'une cible, puis touchez ou glissez pour placer chaque impact. Zoom et déplacement à deux doigts.
 - **Calibration assistée** : placez le centre, puis ajustez un anneau sur un repère de diamètre connu (visuel noir C50 de 200 mm, carabine 10 m de 30,5 mm, pistolet 10 m de 59,5 mm, C200 de 400 mm, ou diamètre personnalisé) pour obtenir l'échelle en px/mm.
 - **Repérage automatique du visuel** : le visuel noir est localisé sur la photo par son contour, même avec des impacts, des pastilles ou un objet devant. Son centre et son diamètre donnent le centre de la cible et l'échelle, pour le type de cible sélectionné.
-- **Détection automatique des impacts** : dès que le repérage est appliqué, les impacts sont recherchés et placés.
+- **Détection automatique des impacts** : en arrivant à l'étape Impacts avec une photo calibrée, les impacts sont recherchés et placés.
   - Dans le noir, un impact est une tache plus claire que l'encre ; sur le blanc, une tache qui s'écarte de la couleur locale du papier ; sur une cible réactive, le halo jaune.
   - La taille d'un impact isolé est mesurée sur la photo elle-même, ce qui permet de séparer les impacts qui se chevauchent.
   - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés. Un impact qui touche un chiffre est conservé : un chiffre n'a que des traits fins, un impact a un cœur plein.

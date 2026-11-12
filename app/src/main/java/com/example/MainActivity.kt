@@ -45,6 +45,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.AdsClick
@@ -160,10 +163,10 @@ import com.example.ui.components.ChartDisplayType
 import com.example.ui.components.MoaProgressionChart
 import com.example.ui.components.SessionChartData
 import com.example.ui.components.ActionHeight
-import com.example.ui.components.ModeOption
-import com.example.ui.components.ModeSelector
+import com.example.ui.components.StepIndicator
 import com.example.ui.components.SessionSummaryCard
 import com.example.ui.components.StatTile
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -193,6 +196,13 @@ enum class AnnotationMode {
     CALIBRATE,
     TARGET_CENTER,
     IMPACT
+}
+
+/** Steps of recording a session, one screen each. */
+enum class ShootingStep {
+    SESSION,
+    TARGET,
+    IMPACTS
 }
 
 enum class AppTab {
@@ -249,13 +259,13 @@ fun TirTrackerApp() {
     val autoImpactDash = remember { PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f) }
 
     var currentTab by remember { mutableStateOf(AppTab.SHOOTING_RANGE) }
+    var shootingStep by remember { mutableStateOf(ShootingStep.SESSION) }
 
     var targetTypeInput by remember { mutableStateOf("C50 (25m/50m)") }
 
     // 1. Photo selection & Recognition state
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var detectedTargetResult by remember { mutableStateOf<TargetDetectionResult?>(null) }
-    var showTargetDetectionDialog by remember { mutableStateOf(false) }
     var isAnalyzingTarget by remember { mutableStateOf(false) }
 
     // 2. Caractérisation de la séance
@@ -285,7 +295,6 @@ fun TirTrackerApp() {
     val weaponsList = remember { mutableStateListOf<Weapon>() }
     var showWeaponsDialog by remember { mutableStateOf(false) }
     var showAddWeaponDialog by remember { mutableStateOf(false) }
-    var showSessionSheet by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -296,8 +305,10 @@ fun TirTrackerApp() {
     var activeMode by remember { mutableStateOf(AnnotationMode.IMPACT) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    var canvasWidthPx by remember { mutableFloatStateOf(1000f) }
-    var canvasHeightPx by remember { mutableFloatStateOf(1000f) }
+    // Until the target is laid out, assume it spans the screen width minus the margins.
+    val expectedCanvasPx = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - 32.dp).toPx() }
+    var canvasWidthPx by remember { mutableFloatStateOf(expectedCanvasPx) }
+    var canvasHeightPx by remember { mutableFloatStateOf(expectedCanvasPx) }
     var isUserDragging by remember { mutableStateOf(false) }
     var dragHudText by remember { mutableStateOf("") }
     var pendingImpactOffset by remember { mutableStateOf<Offset?>(null) }
@@ -488,14 +499,11 @@ fun TirTrackerApp() {
             return
         }
         isDetectingImpacts = true
-        coroutineScope.launch {
+        coroutineScope.launch(Dispatchers.Main.immediate) {
             try {
                 val targetRes = detectedTargetResult
                     ?: TargetRecognitionEngine.analyzeImage(context, imageUri, targetTypeInput, visualDiameterMm())
                 if (selectedImageUri != imageUri) return@launch
-                // Not calibrated yet: use the visual found on the photo, so that detection and
-                // scoring share the same center and scale.
-                if (pixelPerMm <= 0f) applyDetectedCalibration(targetRes)
 
                 val aspect = targetRes.imageAspectRatio
                 val shownWidthPx = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, aspect)
@@ -567,7 +575,6 @@ fun TirTrackerApp() {
     // A new photo: whatever was found or calibrated on the previous one no longer applies.
     fun resetPhotoAnalysis() {
         detectedTargetResult = null
-        showTargetDetectionDialog = false
         pixelPerMm = 0f
         calibrationEdgePx = null
         calibrationStep = CalibrationStep.SET_CENTER
@@ -578,12 +585,12 @@ fun TirTrackerApp() {
     fun analyzeSelectedPhoto() {
         val uri = selectedImageUri ?: return
         isAnalyzingTarget = true
-        coroutineScope.launch {
+        coroutineScope.launch(Dispatchers.Main.immediate) {
             try {
                 val result = TargetRecognitionEngine.analyzeImage(context, uri, targetTypeInput, visualDiameterMm())
                 if (selectedImageUri == uri) {
                     detectedTargetResult = result
-                    showTargetDetectionDialog = true
+                    if (!applyDetectedCalibration(result)) calibrationStep = CalibrationStep.SET_CENTER
                 }
             } finally {
                 isAnalyzingTarget = false
@@ -598,6 +605,28 @@ fun TirTrackerApp() {
             selectedImageUri = uri
             resetPhotoAnalysis()
             analyzeSelectedPhoto()
+        }
+    }
+
+    // Moves to a step. The target step is the only one where the calibration can change, the
+    // impacts step the only one where impacts are placed or detected.
+    fun goToStep(step: ShootingStep) {
+        shootingStep = step
+        when (step) {
+            ShootingStep.SESSION -> Unit
+            ShootingStep.TARGET -> {
+                activeMode = AnnotationMode.CALIBRATE
+                calibrationStep = if (pixelPerMm > 0f) CalibrationStep.CALIBRATED else CalibrationStep.SET_CENTER
+                // A photo that was never analyzed (or whose target type changed): look for the visual.
+                if (selectedImageUri != null && pixelPerMm <= 0f && detectedTargetResult == null && !isAnalyzingTarget) {
+                    analyzeSelectedPhoto()
+                }
+            }
+            ShootingStep.IMPACTS -> {
+                activeMode = AnnotationMode.IMPACT
+                // First visit with a calibrated photo: look for the impacts right away.
+                if (selectedImageUri != null && pixelPerMm > 0f && impactsList.isEmpty()) detectImpactsOnPhoto()
+            }
         }
     }
 
@@ -651,6 +680,8 @@ fun TirTrackerApp() {
             }
 
             currentTab = AppTab.SHOOTING_RANGE
+            shootingStep = ShootingStep.IMPACTS
+            activeMode = AnnotationMode.IMPACT
             Toast.makeText(context, "Séance chargée : vous pouvez ajuster les points et impacts a posteriori.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(context, "Erreur chargement séance : ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
@@ -719,93 +750,6 @@ fun TirTrackerApp() {
         } catch (e: Exception) {
             Toast.makeText(context, "Erreur : ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    // DIALOG: Repérage automatique du visuel
-    if (showTargetDetectionDialog && detectedTargetResult != null) {
-        val result = detectedTargetResult!!
-        AlertDialog(
-            onDismissRequest = { showTargetDetectionDialog = false },
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Repérage de la cible", fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = if (result.visualFound) "🎯 Visuel noir repéré" else "Visuel noir non repéré",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "Cible sélectionnée : ${result.targetType}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.secondary,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = result.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    Text(
-                        text = result.details,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (result.visualFound) {
-                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Text("En appliquant :", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                                Text("• Centre placé au milieu du visuel", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("• Échelle calculée pour un visuel de ${result.visualDiameterMm} mm", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("• Impacts recherchés automatiquement", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("Si ce n'est pas la bonne cible, fermez, changez le type de cible puis relancez « Scanner cible ».", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                if (result.visualFound) {
-                    Button(
-                        onClick = {
-                            applyDetectedCalibration(result)
-
-                            showTargetDetectionDialog = false
-                            Toast.makeText(context, "Cible calibrée automatiquement.", Toast.LENGTH_SHORT).show()
-
-                            // The target is now centered and scaled: look for the impacts right away.
-                            detectImpactsOnPhoto()
-                        }
-                    ) {
-                        Text("Appliquer & Calibrer")
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTargetDetectionDialog = false }) {
-                    Text("Fermer")
-                }
-            }
-        )
     }
 
     // DIALOG: Ajustement des points a posteriori pour un coup spécifique
@@ -1198,6 +1142,9 @@ fun TirTrackerApp() {
                                     onClick = {
                                         editingSessionId = null
                                         impactsList.clear()
+                                        selectedImageUri = null
+                                        resetPhotoAnalysis()
+                                        goToStep(ShootingStep.SESSION)
                                         sessionTitleInput = "Séance de tir"
                                         Toast.makeText(context, "Nouvelle séance vierge réinitialisée.", Toast.LENGTH_SHORT).show()
                                     },
@@ -1209,7 +1156,131 @@ fun TirTrackerApp() {
                         }
                     }
 
-                    // 1. RÉSUMÉ DE LA SÉANCE (le formulaire s'ouvre dans un panneau)
+                    StepIndicator(
+                        steps = listOf("Séance", "Cible", "Impacts"),
+                        currentIndex = shootingStep.ordinal,
+                        onSelect = { goToStep(ShootingStep.entries[it]) },
+                        modifier = Modifier.testTag("step_indicator")
+                    )
+
+                    if (shootingStep == ShootingStep.SESSION) {
+                    // ÉTAPE 1 : LA SÉANCE
+                    Card(
+                        modifier = Modifier.fillMaxWidth().testTag("session_form"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Text("Votre séance", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            OutlinedButton(
+                                onClick = { showWeaponsDialog = true },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.secondary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Choisir dans mes armes (${weaponsList.size})", fontSize = 15.sp, color = MaterialTheme.colorScheme.secondary)
+                            }
+                                // Titre de séance
+                                OutlinedTextField(
+                                    value = sessionTitleInput,
+                                    onValueChange = { sessionTitleInput = it },
+                                    label = { Text("Titre de la séance") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+
+                                // Type de cible avec Reconnaissance Auto Badge
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Type de cible", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (detectedTargetResult?.visualFound == true) {
+                                        Text(
+                                            text = "🎯 Visuel repéré",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
+                                }
+
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(targetTypeOptions) { target ->
+                                        FilterChip(
+                                            selected = targetTypeInput == target,
+                                            onClick = {
+                                                if (target != targetTypeInput && pixelPerMm > 0f) {
+                                                    // Another target means another visual size: calibrate again.
+                                                    resetPhotoAnalysis()
+                                                }
+                                                targetTypeInput = target
+                                                if (target.contains("10m")) distanceInput = "10"
+                                                else if (target.contains("200m")) distanceInput = "200"
+                                            },
+                                            label = { Text(target, style = MaterialTheme.typography.labelLarge) },
+                                            modifier = Modifier.height(44.dp)
+                                        )
+                                    }
+                                }
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = weaponNameInput,
+                                        onValueChange = { weaponNameInput = it },
+                                        label = { Text("Arme") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1.3f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+
+                                    OutlinedTextField(
+                                        value = weaponCaliberInput,
+                                        onValueChange = { weaponCaliberInput = it },
+                                        label = { Text("Calibre") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                }
+
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedTextField(
+                                        value = distanceInput,
+                                        onValueChange = { distanceInput = it },
+                                        label = { Text("Distance (m)") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        singleLine = true,
+                                        modifier = Modifier.weight(0.9f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+
+                                    OutlinedTextField(
+                                        value = ammoInput,
+                                        onValueChange = { ammoInput = it },
+                                        label = { Text("Munitions (marque/grain)") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1.5f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                }
+                        }
+                    }
+
+                    Button(
+                        onClick = { goToStep(ShootingStep.TARGET) },
+                        modifier = Modifier.fillMaxWidth().height(ActionHeight).testTag("next_to_target_button"),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("Suivant : la cible", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(22.dp))
+                    }
+                    } else {
+                    // ÉTAPES 2 ET 3 : rappel de la séance, puis la cible
                     SessionSummaryCard(
                         title = sessionTitleInput,
                         targetType = targetTypeInput,
@@ -1217,10 +1288,22 @@ fun TirTrackerApp() {
                         weapon = weaponNameInput,
                         caliber = weaponCaliberInput,
                         ammo = ammoInput,
-                        onEdit = { showSessionSheet = true },
+                        onEdit = { goToStep(ShootingStep.SESSION) },
                         modifier = Modifier.testTag("session_characterization_card")
                     )
 
+                    if (shootingStep == ShootingStep.TARGET) {
+                        TargetStatusCard(
+                            hasPhoto = selectedImageUri != null,
+                            isAnalyzing = isAnalyzingTarget,
+                            result = detectedTargetResult,
+                            isCalibrated = pixelPerMm > 0f,
+                            onRetry = { analyzeSelectedPhoto() }
+                        )
+                    }
+
+                    // La cible n'apparaît à l'étape 2 qu'avec une photo à calibrer.
+                    if (shootingStep == ShootingStep.IMPACTS || selectedImageUri != null) {
                     // 4. CANEVAS AVEC PHOTO ET OVERLAYS
                     BoxWithConstraints(
                         modifier = Modifier
@@ -1527,7 +1610,7 @@ fun TirTrackerApp() {
                                 ) {
                                     Icon(imageVector = Icons.Default.PhotoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(48.dp))
                                     Spacer(modifier = Modifier.height(10.dp))
-                                    Text("Chargez la photo de votre cible, ou touchez ici pour placer les impacts à la main.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                                    Text("Touchez la cible pour placer chaque impact à la main.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                                 }
                             }
 
@@ -1761,71 +1844,31 @@ fun TirTrackerApp() {
                         }
                     }
 
-                    // 2. PHOTO ET REPÉRAGE
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = { photoPickerLauncher.launch("image/*") },
-                            modifier = Modifier.weight(1f).height(ActionHeight).testTag("load_photo_button"),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (selectedImageUri == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                contentColor = if (selectedImageUri == null) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                            )
-                        ) {
-                            Icon(imageVector = Icons.Default.AddAPhoto, contentDescription = null, modifier = Modifier.size(22.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (selectedImageUri != null) "Changer la photo" else "Charger une photo",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
-                            )
-                        }
-
-                        if (selectedImageUri != null) {
-                            Button(
-                                onClick = { analyzeSelectedPhoto() },
-                                enabled = !isAnalyzingTarget,
-                                modifier = Modifier.weight(1f).height(ActionHeight).testTag("scan_target_button"),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.secondary,
-                                    contentColor = MaterialTheme.colorScheme.onSecondary
-                                )
-                            ) {
-                                if (isAnalyzingTarget) {
-                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSecondary)
-                                } else {
-                                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(22.dp))
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Repérer la cible", fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                            }
-                        }
                     }
 
-                    // 3. MODE DE POINTAGE
-                    ModeSelector(
-                        options = listOf(
-                            ModeOption(AnnotationMode.IMPACT, "Impacts", Icons.Default.AdsClick, Color(0xFFEF4444)),
-                            ModeOption(AnnotationMode.TARGET_CENTER, "Centre", Icons.Default.CenterFocusStrong, Color(0xFF10B981)),
-                            ModeOption(AnnotationMode.CALIBRATE, "Échelle", Icons.Default.Straighten, Color(0xFFF59E0B))
-                        ),
-                        selected = activeMode,
-                        onSelect = { mode ->
-                            activeMode = mode
-                            if (mode == AnnotationMode.CALIBRATE) {
-                                calibrationStep = when {
-                                    targetCenterPx == null -> CalibrationStep.SET_CENTER
-                                    calibrationEdgePx == null -> CalibrationStep.CLICK_EDGE
-                                    else -> CalibrationStep.CALIBRATED
-                                }
-                            }
-                        }
-                    )
+                    if (shootingStep == ShootingStep.TARGET) {
+                    // ÉTAPE 2 : LA CIBLE (photo, repérage, calibration)
+                    Button(
+                        onClick = { photoPickerLauncher.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth().height(ActionHeight).testTag("load_photo_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selectedImageUri == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = if (selectedImageUri == null) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                        )
+                    ) {
+                        Icon(imageVector = Icons.Default.AddAPhoto, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (selectedImageUri != null) "Changer la photo" else "Charger la photo de la cible",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
 
                     // Panneau d'assistance guidé à la calibration du visuel
-                    if (activeMode == AnnotationMode.CALIBRATE) RecomposeScope {
+                    if (selectedImageUri != null && !isAnalyzingTarget) RecomposeScope {
                         CalibrationAssistantPanel(
                             selectedReference = selectedCalibrationRef,
                             onSelectReference = { ref ->
@@ -1840,14 +1883,30 @@ fun TirTrackerApp() {
                             currentStep = calibrationStep,
                             onStepChange = { step -> calibrationStep = step },
                             pixelPerMm = pixelPerMm,
-                            isCenterPlaced = targetCenterPx != null,
-                            onFinishCalibration = {
-                                activeMode = AnnotationMode.IMPACT
-                                Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
-                            }
+                            isCenterPlaced = targetCenterPx != null
                         )
                     }
 
+
+                    StepNavigation(
+                        onBack = { goToStep(ShootingStep.SESSION) },
+                        nextLabel = if (selectedImageUri == null) "Sans photo" else "Suivant : impacts",
+                        nextEnabled = selectedImageUri == null || (pixelPerMm > 0f && !isAnalyzingTarget),
+                        onNext = { goToStep(ShootingStep.IMPACTS) },
+                        nextTag = "next_to_impacts_button",
+                        nextProminent = selectedImageUri != null
+                    )
+                    if (selectedImageUri != null && pixelPerMm <= 0f && !isAnalyzingTarget) {
+                        Text(
+                            text = "Réglez le centre et le bord du visuel pour continuer.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    } else {
+                    // ÉTAPE 3 : LES IMPACTS
                     // 5. IMPACTS ET POINTS
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -1953,7 +2012,7 @@ fun TirTrackerApp() {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OutlinedButton(
                                     onClick = { detectImpactsOnPhoto() },
-                                    enabled = selectedImageUri != null && !isDetectingImpacts,
+                                    enabled = selectedImageUri != null && pixelPerMm > 0f && !isDetectingImpacts,
                                     modifier = Modifier.weight(1f).height(52.dp).testTag("detect_impacts_button"),
                                     shape = RoundedCornerShape(14.dp)
                                 ) {
@@ -2021,21 +2080,16 @@ fun TirTrackerApp() {
                         }
                     }
 
-                    // 7. BOUTON ENREGISTRER LA SÉANCE
-                    Button(
-                        onClick = { saveSession() },
-                        enabled = historyLoaded,
-                        modifier = Modifier.fillMaxWidth().height(ActionHeight).testTag("save_session_button"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Icon(imageVector = Icons.Default.Save, contentDescription = null, modifier = Modifier.size(22.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (editingSessionId != null) "Mettre à jour la séance" else "Enregistrer la séance",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                    // 7. RETOUR / ENREGISTRER
+                    StepNavigation(
+                        onBack = { goToStep(ShootingStep.TARGET) },
+                        nextLabel = if (editingSessionId != null) "Mettre à jour" else "Enregistrer",
+                        nextEnabled = historyLoaded,
+                        onNext = { saveSession() },
+                        nextTag = "save_session_button",
+                        nextIcon = Icons.Default.Save
+                    )
+                    }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -2217,126 +2271,6 @@ fun TirTrackerApp() {
 
             AppTab.ARMORY -> {
                 // Coffre d'armes (Accessible via navigation)
-            }
-        }
-    }
-
-    // PANNEAU: Paramètres de la séance
-    if (showSessionSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showSessionSheet = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = MaterialTheme.colorScheme.surface
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Paramètres de la séance", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                }
-                OutlinedButton(
-                    onClick = { showWeaponsDialog = true },
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.secondary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Choisir dans mes armes (${weaponsList.size})", fontSize = 15.sp, color = MaterialTheme.colorScheme.secondary)
-                }
-                    // Titre de séance
-                    OutlinedTextField(
-                        value = sessionTitleInput,
-                        onValueChange = { sessionTitleInput = it },
-                        label = { Text("Titre de la séance") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-
-                    // Type de cible avec Reconnaissance Auto Badge
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Type de cible", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (detectedTargetResult?.visualFound == true) {
-                            Text(
-                                text = "🎯 Visuel repéré",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                        }
-                    }
-
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(targetTypeOptions) { target ->
-                            FilterChip(
-                                selected = targetTypeInput == target,
-                                onClick = {
-                                    targetTypeInput = target
-                                    if (target.contains("10m")) distanceInput = "10"
-                                    else if (target.contains("200m")) distanceInput = "200"
-                                },
-                                label = { Text(target, style = MaterialTheme.typography.labelLarge) },
-                                modifier = Modifier.height(44.dp)
-                            )
-                        }
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = weaponNameInput,
-                            onValueChange = { weaponNameInput = it },
-                            label = { Text("Arme") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1.3f),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-
-                        OutlinedTextField(
-                            value = weaponCaliberInput,
-                            onValueChange = { weaponCaliberInput = it },
-                            label = { Text("Calibre") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                    }
-
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = distanceInput,
-                            onValueChange = { distanceInput = it },
-                            label = { Text("Distance (m)") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.weight(0.9f),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-
-                        OutlinedTextField(
-                            value = ammoInput,
-                            onValueChange = { ammoInput = it },
-                            label = { Text("Munitions (marque/grain)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1.5f),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                    }
-                Button(
-                    onClick = { showSessionSheet = false },
-                    modifier = Modifier.fillMaxWidth().height(ActionHeight),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Text("Valider", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
             }
         }
     }
@@ -2600,5 +2534,90 @@ private fun HistoryPill(text: String, color: Color) {
             fontWeight = FontWeight.SemiBold,
             color = color
         )
+    }
+}
+/** Back and forward buttons at the bottom of a step. */
+@Composable
+private fun StepNavigation(
+    onBack: () -> Unit,
+    nextLabel: String,
+    nextEnabled: Boolean,
+    onNext: () -> Unit,
+    nextTag: String,
+    nextIcon: androidx.compose.ui.graphics.vector.ImageVector = Icons.AutoMirrored.Filled.ArrowForward,
+    // False when another button on the screen is the main action.
+    nextProminent: Boolean = true
+) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier.height(ActionHeight),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Retour", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Button(
+            onClick = onNext,
+            enabled = nextEnabled,
+            modifier = Modifier.weight(1f).height(ActionHeight).testTag(nextTag),
+            shape = RoundedCornerShape(14.dp),
+            colors = if (nextProminent) ButtonDefaults.buttonColors() else ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            )
+        ) {
+            Text(nextLabel, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(imageVector = nextIcon, contentDescription = null, modifier = Modifier.size(22.dp))
+        }
+    }
+}
+
+/** What happened to the photo on the target step, in one card. */
+@Composable
+private fun TargetStatusCard(
+    hasPhoto: Boolean,
+    isAnalyzing: Boolean,
+    result: TargetDetectionResult?,
+    isCalibrated: Boolean,
+    onRetry: () -> Unit
+) {
+    val (title, body, color) = when {
+        !hasPhoto -> Triple(
+            "Photographiez votre cible",
+            "Le centre et l'échelle seront repérés automatiquement. Sans photo, vous placerez les impacts à la main.",
+            MaterialTheme.colorScheme.onSurface
+        )
+        isAnalyzing -> Triple("Repérage de la cible…", "Recherche du visuel noir sur la photo.", MaterialTheme.colorScheme.secondary)
+        result?.visualFound == true && isCalibrated -> Triple(
+            "Cible repérée",
+            "Vérifiez que le cercle jaune suit le bord du visuel noir et que la croix verte est au centre. Corrigez-les au doigt si besoin.",
+            Color(0xFF10B981)
+        )
+        isCalibrated -> Triple("Cible réglée", "Le centre et l'échelle sont réglés.", Color(0xFF10B981))
+        else -> Triple(
+            "Cible non repérée",
+            (result?.description ?: "Le visuel noir n'a pas été trouvé.") + " Réglez le centre et le bord à la main ci-dessous.",
+            MaterialTheme.colorScheme.secondary
+        )
+    }
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth().testTag("target_status")) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (isAnalyzing) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp, color = color)
+                Spacer(modifier = Modifier.width(14.dp))
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color)
+                Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (hasPhoto && !isAnalyzing && result?.visualFound != true) {
+                TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Réessayer", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
     }
 }
