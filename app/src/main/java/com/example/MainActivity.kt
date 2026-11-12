@@ -161,6 +161,8 @@ import com.example.domain.TargetCalibrationDefaults
 import com.example.domain.TargetDetectionResult
 import com.example.domain.TargetRecognitionEngine
 import com.example.domain.TargetSpecs
+import com.example.domain.TargetScoring
+import com.example.domain.RingModel
 import com.example.ui.components.CalibrationAssistantPanel
 import com.example.ui.components.CalibrationStep
 import com.example.ui.components.ChartDisplayType
@@ -343,72 +345,27 @@ fun TirTrackerApp() {
     var canvasTopInColumnPx by remember { mutableFloatStateOf(0f) }
 
     // Calculate score automatically based on distance from target center
-    fun computeScoreForImpact(realMm: Impact, targetType: String): Pair<Int, Boolean> {
-        val distMm = hypot(realMm.xMm, realMm.yMm)
-        return when {
-            targetType.contains("Carabine 10m") -> {
-                when {
-                    distMm <= 1.0f -> Pair(10, true) // Mouche
-                    distMm <= 2.5f -> Pair(10, false)
-                    distMm <= 5.0f -> Pair(9, false)
-                    distMm <= 7.5f -> Pair(8, false)
-                    distMm <= 10.0f -> Pair(7, false)
-                    distMm <= 13.0f -> Pair(6, false)
-                    distMm <= 16.0f -> Pair(5, false)
-                    distMm <= 19.0f -> Pair(4, false)
-                    distMm <= 22.0f -> Pair(3, false)
-                    distMm <= 25.0f -> Pair(2, false)
-                    distMm <= 30.0f -> Pair(1, false)
-                    else -> Pair(0, false)
-                }
-            }
-            targetType.contains("Pistolet 10m") -> {
-                when {
-                    distMm <= 2.5f -> Pair(10, true)
-                    distMm <= 5.75f -> Pair(10, false)
-                    distMm <= 13.5f -> Pair(9, false)
-                    distMm <= 21.5f -> Pair(8, false)
-                    distMm <= 29.75f -> Pair(7, false)
-                    distMm <= 38.0f -> Pair(6, false)
-                    distMm <= 46.0f -> Pair(5, false)
-                    distMm <= 54.0f -> Pair(4, false)
-                    distMm <= 62.0f -> Pair(3, false)
-                    distMm <= 70.0f -> Pair(2, false)
-                    distMm <= 85.0f -> Pair(1, false)
-                    else -> Pair(0, false)
-                }
-            }
-            targetType.contains("C200") -> {
-                when {
-                    distMm <= 25f -> Pair(10, true)
-                    distMm <= 50f -> Pair(10, false)
-                    distMm <= 100f -> Pair(9, false)
-                    distMm <= 150f -> Pair(8, false)
-                    distMm <= 200f -> Pair(7, false)
-                    distMm <= 250f -> Pair(6, false)
-                    distMm <= 300f -> Pair(5, false)
-                    distMm <= 350f -> Pair(4, false)
-                    distMm <= 400f -> Pair(1, false)
-                    else -> Pair(0, false)
-                }
-            }
-            else -> { // C50 standard (Visuel 200mm, carton 500mm)
-                when {
-                    distMm <= 12.5f -> Pair(10, true) // Mouche 25mm diam
-                    distMm <= 25.0f -> Pair(10, false) // 10: 50mm diam
-                    distMm <= 50.0f -> Pair(9, false)  // 9: 100mm diam
-                    distMm <= 75.0f -> Pair(8, false)  // 8: 150mm diam
-                    distMm <= 100.0f -> Pair(7, false) // 7: 200mm diam (limite noir)
-                    distMm <= 125.0f -> Pair(6, false)
-                    distMm <= 150.0f -> Pair(5, false)
-                    distMm <= 175.0f -> Pair(4, false)
-                    distMm <= 200.0f -> Pair(3, false)
-                    distMm <= 225.0f -> Pair(2, false)
-                    distMm <= 250.0f -> Pair(1, false)
-                    else -> Pair(0, false)
-                }
-            }
+    fun computeScoreForImpact(realMm: Impact, targetType: String): Pair<Int, Boolean> =
+        TargetScoring.tableFor(targetType).score(hypot(realMm.xMm, realMm.yMm))
+
+    // Rings located on the photo for the current calibration; null without a photo, or while the
+    // calibration may still change (target step).
+    var ringModel by remember { mutableStateOf<RingModel?>(null) }
+
+    // Position in mm on the target of a point of the canvas, and its score. With a photo, distances
+    // follow the rings seen on it, so a tilted photo or a curved sheet does not shift the zones.
+    fun locate(point: Offset): Pair<Impact, Pair<Int, Boolean>> {
+        val model = ringModel
+        val realMm = if (model != null) {
+            val aspect = model.imageWidth.toFloat() / model.imageHeight
+            val mm = model.toTargetMm(ImageFit.toImage(point, canvasWidthPx, canvasHeightPx, aspect))
+            Impact(mm.x, mm.y)
+        } else {
+            val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+            val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
+            Impact((point.x - center.x) / pxMm, (center.y - point.y) / pxMm)
         }
+        return Pair(realMm, computeScoreForImpact(realMm, targetTypeInput))
     }
 
     // 6. History & Stats Sheet state
@@ -453,9 +410,8 @@ fun TirTrackerApp() {
         if (impactsList.isEmpty() || pxMm <= 0f) return
         for (i in impactsList.indices) {
             val imp = impactsList[i]
-            val realMm = Impact((imp.canvasOffset.x - center.x) / pxMm, (center.y - imp.canvasOffset.y) / pxMm)
-            val (sc, inner) = computeScoreForImpact(realMm, targetTypeInput)
-            impactsList[i] = imp.copy(realMm = realMm, score = sc, isInnerTen = inner)
+            val (realMm, scorePair) = locate(imp.canvasOffset)
+            impactsList[i] = imp.copy(realMm = realMm, score = scorePair.first, isInnerTen = scorePair.second)
         }
     }
 
@@ -481,6 +437,7 @@ fun TirTrackerApp() {
         val visualRadiusPx = result.detectedBlackRadiusNormalized * shownImageWidthPx
         if (visualRadiusPx <= 0f) return false
 
+        ringModel = null
         targetCenterPx = detectedCenter
         pixelPerMm = visualRadiusPx * 2f / result.visualDiameterMm
         // Show the calibration ring on the visual it was measured on
@@ -552,8 +509,8 @@ fun TirTrackerApp() {
                 val newPoints = ImpactDetector.excludeKnown(impactsList.map { it.canvasOffset }, detected, minGapPx)
 
                 newPoints.forEach { canvasOffset ->
-                    val realImp = Impact((canvasOffset.x - center.x) / pxMm, (center.y - canvasOffset.y) / pxMm)
-                    val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+                    val (realImp, scorePair) = locate(canvasOffset)
+                    val (sc, inner) = scorePair
                     impactsList.add(
                         ScreenImpact(
                             index = impactsList.size + 1,
@@ -582,6 +539,7 @@ fun TirTrackerApp() {
     // A new photo: whatever was found or calibrated on the previous one no longer applies.
     fun resetPhotoAnalysis() {
         detectedTargetResult = null
+        ringModel = null
         pixelPerMm = 0f
         calibrationEdgePx = null
         calibrationStep = CalibrationStep.SET_CENTER
@@ -624,10 +582,8 @@ fun TirTrackerApp() {
     // Puts an impact at a point of the target; its score follows from where it now is.
     fun moveImpact(idx: Int, point: Offset) {
         if (idx !in impactsList.indices) return
-        val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
-        val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-        val realMm = Impact((point.x - center.x) / pxMm, (center.y - point.y) / pxMm)
-        val (sc, inner) = computeScoreForImpact(realMm, targetTypeInput)
+        val (realMm, scorePair) = locate(point)
+        val (sc, inner) = scorePair
         impactsList[idx] = impactsList[idx].copy(isAuto = false, canvasOffset = point, realMm = realMm, score = sc, isInnerTen = inner)
     }
 
@@ -658,6 +614,8 @@ fun TirTrackerApp() {
         when (step) {
             ShootingStep.SESSION -> Unit
             ShootingStep.TARGET -> {
+                // The calibration may change here: rings are located again on the way back.
+                ringModel = null
                 activeMode = AnnotationMode.CALIBRATE
                 calibrationStep = if (pixelPerMm > 0f) CalibrationStep.CALIBRATED else CalibrationStep.SET_CENTER
                 // A photo that was never analyzed (or whose target type changed): look for the visual.
@@ -667,8 +625,33 @@ fun TirTrackerApp() {
             }
             ShootingStep.IMPACTS -> {
                 activeMode = AnnotationMode.IMPACT
-                // First visit with a calibrated photo: look for the impacts right away.
-                if (selectedImageUri != null && pixelPerMm > 0f && impactsList.isEmpty()) detectImpactsOnPhoto()
+                val uri = selectedImageUri
+                val aspect = detectedTargetResult?.imageAspectRatio
+                val visualRadiusMm = (TargetSpecs.forTargetType(targetTypeInput)?.blackVisualDiameterMm ?: 0f) / 2f
+                if (uri != null && pixelPerMm > 0f && aspect != null && ringModel == null && visualRadiusMm > 0f) {
+                    // Locate the rings on the photo first, then score (and on a first visit, detect)
+                    // against them.
+                    isDetectingImpacts = true
+                    coroutineScope.launch(Dispatchers.Main.immediate) {
+                        val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+                        val shownWidth = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, aspect)
+                        val model = TargetRecognitionEngine.buildRingModel(
+                            context, uri,
+                            centerNormalized = ImageFit.toImage(center, canvasWidthPx, canvasHeightPx, aspect),
+                            visualRadiusNormalized = visualRadiusMm * pixelPerMm / shownWidth,
+                            visualRadiusMm = visualRadiusMm,
+                            targetType = targetTypeInput
+                        )
+                        isDetectingImpacts = false
+                        if (selectedImageUri != uri || shootingStep != ShootingStep.IMPACTS) return@launch
+                        ringModel = model
+                        recomputeImpacts(center, pixelPerMm)
+                        if (impactsList.isEmpty()) detectImpactsOnPhoto()
+                    }
+                } else if (uri != null && pixelPerMm > 0f && impactsList.isEmpty()) {
+                    // First visit with a calibrated photo: look for the impacts right away.
+                    detectImpactsOnPhoto()
+                }
             }
         }
     }
@@ -1206,12 +1189,7 @@ fun TirTrackerApp() {
                                             activeDragTarget = "MOVE_SELECTED"
                                         } else {
                                             activeDragTarget = "NEW_IMPACT"
-                                            val center = currentCenter
-                                            val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                                            val xMm = (initialLocalPoint.x - center.x) / pxMm
-                                            val yMm = (center.y - initialLocalPoint.y) / pxMm
-                                            val realImp = Impact(xMm, yMm)
-                                            val scorePair = computeScoreForImpact(realImp, targetTypeInput)
+                                            val scorePair = locate(initialLocalPoint).second
                                             pendingImpactOffset = initialLocalPoint
                                             pendingImpactScore = scorePair
                                         }
@@ -1303,12 +1281,10 @@ fun TirTrackerApp() {
                                                     change.consume()
                                                 }
                                                 AnnotationMode.IMPACT -> {
-                                                    val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
-                                                    val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                                                    val xMm = (currentLocalPoint.x - center.x) / pxMm
-                                                    val yMm = (center.y - currentLocalPoint.y) / pxMm
-                                                    val realImp = Impact(xMm, yMm)
-                                                    val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+                                                    val (realImp, scorePair) = locate(currentLocalPoint)
+                                                    val (sc, inner) = scorePair
+                                                    val xMm = realImp.xMm
+                                                    val yMm = realImp.yMm
                                                     val scoreLabel = if (inner) "10 Mouche" else "$sc pts"
 
                                                     if ((activeDragTarget == "EXISTING_IMPACT" || activeDragTarget == "MOVE_SELECTED") && draggedImpactIndex != null) {
@@ -1365,12 +1341,8 @@ fun TirTrackerApp() {
                                                 targetCenterPx = upLocalPoint
                                             }
                                             AnnotationMode.IMPACT -> {
-                                                val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
-                                                val pxMm = if (pixelPerMm > 0f) pixelPerMm else 4f
-                                                val xMm = (upLocalPoint.x - center.x) / pxMm
-                                                val yMm = (center.y - upLocalPoint.y) / pxMm
-                                                val realImp = Impact(xMm, yMm)
-                                                val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+                                                val (realImp, scorePair) = locate(upLocalPoint)
+                                                val (sc, inner) = scorePair
 
                                                 if (activeDragTarget == "MOVE_SELECTED" && draggedImpactIndex != null) {
                                                     // Touch or drag on the photo: the corrected impact goes there.
