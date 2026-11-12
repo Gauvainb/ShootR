@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -136,6 +137,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -157,6 +159,11 @@ import com.example.ui.components.CalibrationStep
 import com.example.ui.components.ChartDisplayType
 import com.example.ui.components.MoaProgressionChart
 import com.example.ui.components.SessionChartData
+import com.example.ui.components.ActionHeight
+import com.example.ui.components.ModeOption
+import com.example.ui.components.ModeSelector
+import com.example.ui.components.SessionSummaryCard
+import com.example.ui.components.StatTile
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -278,6 +285,8 @@ fun TirTrackerApp() {
     val weaponsList = remember { mutableStateListOf<Weapon>() }
     var showWeaponsDialog by remember { mutableStateOf(false) }
     var showAddWeaponDialog by remember { mutableStateOf(false) }
+    var showSessionSheet by remember { mutableStateOf(false) }
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         weaponsList.addAll(0, LocalJsonStore.loadWeapons(context))
@@ -1159,9 +1168,9 @@ fun TirTrackerApp() {
                         .fillMaxSize()
                         .padding(innerPadding)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                         .testTag("shooting_range_container"),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     // Editing Mode Banner
                     if (editingSessionId != null) {
@@ -1176,11 +1185,11 @@ fun TirTrackerApp() {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(imageVector = Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Ajustement a posteriori de la séance",
-                                        style = MaterialTheme.typography.labelMedium,
+                                        text = "Correction d'une séance enregistrée",
+                                        style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
@@ -1192,274 +1201,25 @@ fun TirTrackerApp() {
                                         sessionTitleInput = "Séance de tir"
                                         Toast.makeText(context, "Nouvelle séance vierge réinitialisée.", Toast.LENGTH_SHORT).show()
                                     },
-                                    contentPadding = ButtonDefaults.TextButtonContentPadding
+                                    modifier = Modifier.heightIn(min = 48.dp)
                                 ) {
-                                    Text("Nouveau tir", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                                    Text("Nouveau tir", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                                 }
                             }
                         }
                     }
 
-                    // 1. CARACTÉRISATION DE LA SÉANCE & TYPE DE CIBLE
-                    Card(
-                        modifier = Modifier.fillMaxWidth().testTag("session_characterization_card"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Paramètres de la séance",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-
-                                OutlinedButton(
-                                    onClick = { showWeaponsDialog = true },
-                                    contentPadding = ButtonDefaults.TextButtonContentPadding,
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.secondary)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Armes (${weaponsList.size})", fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
-                                }
-                            }
-
-                            // Titre de séance
-                            OutlinedTextField(
-                                value = sessionTitleInput,
-                                onValueChange = { sessionTitleInput = it },
-                                label = { Text("Titre de la séance") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
-                            )
-
-                            // Type de cible avec Reconnaissance Auto Badge
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Type de cible :", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (detectedTargetResult?.visualFound == true) {
-                                    Text(
-                                        text = "🎯 Visuel repéré",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
-                                }
-                            }
-
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                items(targetTypeOptions) { target ->
-                                    FilterChip(
-                                        selected = targetTypeInput == target,
-                                        onClick = {
-                                            targetTypeInput = target
-                                            if (target.contains("10m")) distanceInput = "10"
-                                            else if (target.contains("200m")) distanceInput = "200"
-                                        },
-                                        label = { Text(target, fontSize = 11.sp) }
-                                    )
-                                }
-                            }
-
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = weaponNameInput,
-                                    onValueChange = { weaponNameInput = it },
-                                    label = { Text("Arme") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1.3f),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-
-                                OutlinedTextField(
-                                    value = weaponCaliberInput,
-                                    onValueChange = { weaponCaliberInput = it },
-                                    label = { Text("Calibre") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                            }
-
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = distanceInput,
-                                    onValueChange = { distanceInput = it },
-                                    label = { Text("Distance (m)") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    singleLine = true,
-                                    modifier = Modifier.weight(0.9f),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-
-                                OutlinedTextField(
-                                    value = ammoInput,
-                                    onValueChange = { ammoInput = it },
-                                    label = { Text("Munitions (marque/grain)") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1.5f),
-                                    shape = RoundedCornerShape(10.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    // 2. MODES DE POINTAGE
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            FilterChip(
-                                selected = activeMode == AnnotationMode.CALIBRATE,
-                                onClick = {
-                                    activeMode = AnnotationMode.CALIBRATE
-                                    if (targetCenterPx == null) {
-                                        calibrationStep = CalibrationStep.SET_CENTER
-                                    } else if (calibrationEdgePx == null) {
-                                        calibrationStep = CalibrationStep.CLICK_EDGE
-                                    } else {
-                                        calibrationStep = CalibrationStep.CALIBRATED
-                                    }
-                                },
-                                label = { Text("Calibrer visuel", fontSize = 13.sp) },
-                                leadingIcon = { Icon(imageVector = Icons.Default.Straighten, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp)) },
-                                modifier = Modifier.weight(1.2f),
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFF59E0B).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFBBF24))
-                            )
-                            FilterChip(
-                                selected = activeMode == AnnotationMode.TARGET_CENTER,
-                                onClick = { activeMode = AnnotationMode.TARGET_CENTER },
-                                label = { Text("Centre", fontSize = 13.sp) },
-                                leadingIcon = { Icon(imageVector = Icons.Default.CenterFocusStrong, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp)) },
-                                modifier = Modifier.weight(0.9f),
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF10B981).copy(alpha = 0.25f), selectedLabelColor = Color(0xFF34D399))
-                            )
-                            FilterChip(
-                                selected = activeMode == AnnotationMode.IMPACT,
-                                onClick = { activeMode = AnnotationMode.IMPACT },
-                                label = { Text("Impact", fontSize = 13.sp) },
-                                leadingIcon = { Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp)) },
-                                modifier = Modifier.weight(0.9f),
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFEF4444).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFF6B6B))
-                            )
-                        }
-                    }
-
-                    // Panneau d'assistance guidé à la calibration du visuel
-                    if (activeMode == AnnotationMode.CALIBRATE) RecomposeScope {
-                        CalibrationAssistantPanel(
-                            selectedReference = selectedCalibrationRef,
-                            onSelectReference = { ref ->
-                                selectedCalibrationRef = ref
-                                if (calibrationEdgePx != null && targetCenterPx != null) {
-                                    val rPx = hypot(calibrationEdgePx!!.x - targetCenterPx!!.x, calibrationEdgePx!!.y - targetCenterPx!!.y)
-                                    if (rPx > 5f && ref.radiusMm > 0f) {
-                                        pixelPerMm = rPx / ref.radiusMm
-                                    }
-                                }
-                            },
-                            currentStep = calibrationStep,
-                            onStepChange = { step -> calibrationStep = step },
-                            pixelPerMm = pixelPerMm,
-                            isCenterPlaced = targetCenterPx != null,
-                            onFinishCalibration = {
-                                activeMode = AnnotationMode.IMPACT
-                                Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                    }
-
-                    // 3. PHOTO LOADER & RECONNAISSANCE AUTOMATIQUE
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(
-                                onClick = { photoPickerLauncher.launch("image/*") },
-                                modifier = Modifier.height(44.dp).testTag("load_photo_button"),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                            ) {
-                                Icon(imageVector = Icons.Default.AddAPhoto, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (selectedImageUri != null) "Changer photo" else "Charger photo",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-
-                            // Bouton Scanner / Reconnaissance Cible
-                            if (selectedImageUri != null) {
-                                OutlinedButton(
-                                    onClick = { analyzeSelectedPhoto() },
-                                    enabled = !isAnalyzingTarget,
-                                    modifier = Modifier.height(44.dp),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Scanner cible", fontSize = 11.sp, color = MaterialTheme.colorScheme.secondary)
-                                }
-
-                                Spacer(modifier = Modifier.width(6.dp))
-
-                                OutlinedButton(
-                                    onClick = { detectImpactsOnPhoto() },
-                                    enabled = !isDetectingImpacts,
-                                    modifier = Modifier.height(44.dp).testTag("detect_impacts_button"),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    if (isDetectingImpacts) {
-                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    } else {
-                                        Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                    }
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = if (isDetectingImpacts) "Détection…" else "Détecter impacts",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { scale = 1f; offset = Offset.Zero }) {
-                                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Reset zoom", modifier = Modifier.size(20.dp))
-                            }
-                            IconButton(
-                                onClick = { if (impactsList.isNotEmpty()) impactsList.removeAt(impactsList.lastIndex) },
-                                enabled = impactsList.isNotEmpty()
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Undo,
-                                    contentDescription = "Undo",
-                                    tint = if (impactsList.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
+                    // 1. RÉSUMÉ DE LA SÉANCE (le formulaire s'ouvre dans un panneau)
+                    SessionSummaryCard(
+                        title = sessionTitleInput,
+                        targetType = targetTypeInput,
+                        distanceMeters = distanceInput,
+                        weapon = weaponNameInput,
+                        caliber = weaponCaliberInput,
+                        ammo = ammoInput,
+                        onEdit = { showSessionSheet = true },
+                        modifier = Modifier.testTag("session_characterization_card")
+                    )
 
                     // 4. CANEVAS AVEC PHOTO ET OVERLAYS
                     BoxWithConstraints(
@@ -1494,7 +1254,7 @@ fun TirTrackerApp() {
                                     val distToRing = kotlin.math.abs(distToCenter - visualRadiusPx)
 
                                     // Check if down on an existing impact
-                                    val hitRadiusImpact = 35f / scale
+                                    val hitRadiusImpact = 24.dp.toPx() / scale
                                     val tappedImpactIdx = impactsList.indexOfFirst { imp ->
                                         hypot(imp.canvasOffset.x - initialLocalPoint.x, imp.canvasOffset.y - initialLocalPoint.y) <= hitRadiusImpact
                                     }
@@ -1503,8 +1263,8 @@ fun TirTrackerApp() {
                                         activeDragTarget = when {
                                             calibrationStep == CalibrationStep.SET_CENTER -> "CENTER"
                                             calibrationStep == CalibrationStep.CLICK_EDGE -> "DIAMETER"
-                                            distToCenter < 45f / scale -> "CENTER"
-                                            distToRing < 45f / scale -> "DIAMETER"
+                                            distToCenter < 28.dp.toPx() / scale -> "CENTER"
+                                            distToRing < 28.dp.toPx() / scale -> "DIAMETER"
                                             else -> "DIAMETER"
                                         }
                                     } else if (activeMode == AnnotationMode.TARGET_CENTER) {
@@ -1759,7 +1519,7 @@ fun TirTrackerApp() {
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
                                 )
-                            } else {
+                            } else if (impactsList.isEmpty()) {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center,
@@ -1767,7 +1527,7 @@ fun TirTrackerApp() {
                                 ) {
                                     Icon(imageVector = Icons.Default.PhotoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(48.dp))
                                     Spacer(modifier = Modifier.height(10.dp))
-                                    Text("Touchez « Charger photo » ou touchez directement la cible pour placer des impacts.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                                    Text("Chargez la photo de votre cible, ou touchez ici pour placer les impacts à la main.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                                 }
                             }
 
@@ -1775,13 +1535,15 @@ fun TirTrackerApp() {
                                 val center = targetCenterPx ?: Offset(size.width / 2f, size.height / 2f)
 
                                 // Centre de la cible (croix et réticule vert)
-                                val r = 18f
-                                drawCircle(color = Color(0xFF10B981).copy(alpha = 0.35f), radius = r + 6f, center = center)
-                                drawCircle(color = Color(0xFF10B981), radius = r, center = center, style = Stroke(width = 2.5f))
-                                drawCircle(color = Color(0xFF10B981), radius = 3.5f, center = center)
-                                val arm = 28f
-                                drawLine(color = Color(0xFF10B981), start = Offset(center.x - arm, center.y), end = Offset(center.x + arm, center.y), strokeWidth = 2.2f)
-                                drawLine(color = Color(0xFF10B981), start = Offset(center.x, center.y - arm), end = Offset(center.x, center.y + arm), strokeWidth = 2.2f)
+                                // Overlay sizes in dp, so markers keep the same physical size on every screen.
+                                val k = 0.75f * density
+                                val r = 18f * k
+                                drawCircle(color = Color(0xFF10B981).copy(alpha = 0.35f), radius = r + 6f * k, center = center)
+                                drawCircle(color = Color(0xFF10B981), radius = r, center = center, style = Stroke(width = 2.5f * k))
+                                drawCircle(color = Color(0xFF10B981), radius = 3.5f * k, center = center)
+                                val arm = 28f * k
+                                drawLine(color = Color(0xFF10B981), start = Offset(center.x - arm, center.y), end = Offset(center.x + arm, center.y), strokeWidth = 2.2f * k)
+                                drawLine(color = Color(0xFF10B981), start = Offset(center.x, center.y - arm), end = Offset(center.x, center.y + arm), strokeWidth = 2.2f * k)
 
                                 // Anneau d'étalonnage du visuel cible
                                 if (pixelPerMm > 0f) {
@@ -1798,20 +1560,20 @@ fun TirTrackerApp() {
                                             color = Color(0xFFFBBF24),
                                             radius = visualRadiusPx,
                                             center = center,
-                                            style = Stroke(width = 3f, pathEffect = calibrationRingDash)
+                                            style = Stroke(width = 3f * k, pathEffect = calibrationRingDash)
                                         )
 
                                         // Poignée d'ajustement sur le bord du visuel
                                         val edgePoint = calibrationEdgePx ?: Offset(center.x + visualRadiusPx, center.y)
-                                        drawCircle(color = Color(0xFFFBBF24).copy(alpha = 0.4f), radius = 14f, center = edgePoint)
-                                        drawCircle(color = Color(0xFFFBBF24), radius = 7f, center = edgePoint)
-                                        drawCircle(color = Color.White, radius = 7f, center = edgePoint, style = Stroke(width = 2f))
+                                        drawCircle(color = Color(0xFFFBBF24).copy(alpha = 0.4f), radius = 14f * k, center = edgePoint)
+                                        drawCircle(color = Color(0xFFFBBF24), radius = 7f * k, center = edgePoint)
+                                        drawCircle(color = Color.White, radius = 7f * k, center = edgePoint, style = Stroke(width = 2f * k))
 
                                         drawLine(
                                             color = Color(0xFFFBBF24).copy(alpha = 0.85f),
                                             start = center,
                                             end = edgePoint,
-                                            strokeWidth = 2f,
+                                            strokeWidth = 2f * k,
                                             pathEffect = calibrationRadiusDash
                                         )
 
@@ -1827,7 +1589,7 @@ fun TirTrackerApp() {
                                             color = Color(0xFFFBBF24).copy(alpha = 0.35f),
                                             radius = visualRadiusPx,
                                             center = center,
-                                            style = Stroke(width = 1.5f)
+                                            style = Stroke(width = 1.5f * k)
                                         )
                                     }
                                 }
@@ -1851,19 +1613,19 @@ fun TirTrackerApp() {
 
                                     drawCircle(
                                         color = Color(0xFF38BDF8).copy(alpha = 0.65f),
-                                        radius = maxRadius + 8f,
+                                        radius = maxRadius + 8f * k,
                                         center = mpiPos,
-                                        style = Stroke(width = 2f, pathEffect = groupCircleDash)
+                                        style = Stroke(width = 2f * k, pathEffect = groupCircleDash)
                                     )
 
-                                    val mpiArm = 18f
-                                    drawCircle(color = Color(0xFF0284C7), radius = 4f, center = mpiPos)
-                                    drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x - mpiArm, mpiPos.y), end = Offset(mpiPos.x + mpiArm, mpiPos.y), strokeWidth = 2.5f)
-                                    drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x, mpiPos.y - mpiArm), end = Offset(mpiPos.x, mpiPos.y + mpiArm), strokeWidth = 2.5f)
+                                    val mpiArm = 18f * k
+                                    drawCircle(color = Color(0xFF0284C7), radius = 4f * k, center = mpiPos)
+                                    drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x - mpiArm, mpiPos.y), end = Offset(mpiPos.x + mpiArm, mpiPos.y), strokeWidth = 2.5f * k)
+                                    drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x, mpiPos.y - mpiArm), end = Offset(mpiPos.x, mpiPos.y + mpiArm), strokeWidth = 2.5f * k)
                                 }
 
                                 // Dessin des impacts avec numérotation
-                                val radius = 13f
+                                val radius = 13f * k
                                 impactsList.forEachIndexed { idx, imp ->
                                     val pos = imp.canvasOffset
                                     val isLatest = idx == impactsList.lastIndex
@@ -1871,13 +1633,13 @@ fun TirTrackerApp() {
 
                                     if (isBeingDragged) {
                                         // Réticule et halo d'ajustement en temps réel pour l'impact déplacé
-                                        val arm = 24f
-                                        drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f, center = pos)
-                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f)
-                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f)
+                                        val arm = 24f * k
+                                        drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f * k, center = pos)
+                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f * k)
+                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f * k)
                                     }
 
-                                    drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = radius + 2f, center = Offset(pos.x + 1f, pos.y + 1f))
+                                    drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = radius + 2f * k, center = Offset(pos.x + 1f * k, pos.y + 1f * k))
                                     val impactColor = when {
                                         imp.isFlyer -> Color(0xFF6B7280) // Flyer grisé
                                         imp.isInnerTen -> Color(0xFF10B981) // Mouche verte
@@ -1886,10 +1648,10 @@ fun TirTrackerApp() {
                                         else -> Color(0xFFDC2626)
                                     }
                                     drawCircle(color = impactColor, radius = radius, center = pos)
-                                    drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = if (isBeingDragged) 2.8f else 2f))
+                                    drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = (if (isBeingDragged) 2.8f else 2f) * k))
                                     if (imp.isAuto) {
                                         // Detected automatically, not confirmed yet
-                                        drawCircle(color = Color(0xFF38BDF8), radius = radius + 5f, center = pos, style = Stroke(width = 2f, pathEffect = autoImpactDash))
+                                        drawCircle(color = Color(0xFF38BDF8), radius = radius + 5f * k, center = pos, style = Stroke(width = 2f * k, pathEffect = autoImpactDash))
                                     }
 
                                     val numLayout = textMeasurer.measure(
@@ -1905,10 +1667,10 @@ fun TirTrackerApp() {
                                 // Dessin du nouvel impact en cours d'ajustement dynamique au doigt
                                 pendingImpactOffset?.let { pos ->
                                     val newIdx = impactsList.size + 1
-                                    val arm = 24f
-                                    drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f, center = pos)
-                                    drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f)
-                                    drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f)
+                                    val arm = 24f * k
+                                    drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f * k, center = pos)
+                                    drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f * k)
+                                    drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f * k)
 
                                     val (sc, inner) = pendingImpactScore ?: Pair(10, false)
                                     val impactColor = when {
@@ -1917,7 +1679,7 @@ fun TirTrackerApp() {
                                         else -> Color(0xFFFF3B30)
                                     }
                                     drawCircle(color = impactColor, radius = radius, center = pos)
-                                    drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = 2.8f))
+                                    drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = 2.8f * k))
 
                                     val numLayout = textMeasurer.measure(
                                         newIdx.toString(),
@@ -1942,30 +1704,29 @@ fun TirTrackerApp() {
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                             ) {
                                 if (isUserDragging && dragHudText.isNotBlank()) {
                                     Text(
                                         text = dragHudText,
-                                        style = MaterialTheme.typography.labelSmall,
+                                        style = MaterialTheme.typography.labelLarge,
                                         color = Color(0xFFFBBF24),
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
                                     )
                                 } else {
                                     val modeText = when (activeMode) {
-                                        AnnotationMode.CALIBRATE -> {
-                                            if (calibrationStep == CalibrationStep.SET_CENTER) "🎯 Glissez le doigt pour centrer la croix verte • 2 doigts pour défiler/zoomer"
-                                            else "📏 Glissez le doigt pour ajuster le diamètre • 2 doigts pour défiler/zoomer"
-                                        }
-                                        AnnotationMode.TARGET_CENTER -> "🎯 Glissez le doigt pour ajuster le centre • 2 doigts pour défiler/zoomer"
-                                        AnnotationMode.IMPACT -> "🔴 Touchez ou glissez le doigt pour placer / ajuster les impacts • 2 doigts pour défiler/zoomer"
+                                        AnnotationMode.CALIBRATE ->
+                                            if (calibrationStep == CalibrationStep.SET_CENTER) "Touchez le centre de la cible"
+                                            else "Glissez jusqu'au bord du visuel"
+                                        AnnotationMode.TARGET_CENTER -> "Touchez ou glissez pour placer le centre"
+                                        AnnotationMode.IMPACT -> "Touchez pour placer un impact"
                                     }
                                     Text(
                                         text = modeText,
-                                        style = MaterialTheme.typography.labelSmall,
+                                        style = MaterialTheme.typography.labelLarge,
                                         color = Color(0xFFE2E8F0),
-                                        fontWeight = FontWeight.Medium,
-                                        fontSize = 10.sp
+                                        maxLines = 1
                                     )
                                 }
                             }
@@ -1977,21 +1738,22 @@ fun TirTrackerApp() {
                                 modifier = Modifier
                                     .align(Alignment.BottomEnd)
                                     .padding(8.dp),
-                                shape = RoundedCornerShape(8.dp),
+                                shape = RoundedCornerShape(12.dp),
                                 color = Color(0xDD000000)
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .clickable { scale = 1f; offset = Offset.Zero }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .heightIn(min = 44.dp)
+                                        .padding(horizontal = 12.dp)
                                 ) {
-                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(imageVector = Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "${String.format(Locale.US, "%.1f", scale)}x (RàZ)",
+                                        text = "${String.format(Locale.US, "%.1f", scale)}× · Recadrer",
                                         color = Color.White,
-                                        fontSize = 10.sp,
+                                        style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
@@ -1999,85 +1761,130 @@ fun TirTrackerApp() {
                         }
                     }
 
-                    // 5. TABLEAU D'AJUSTEMENT RÉTROACTIF DES IMPACTS (A POSTERIORI)
+                    // 2. PHOTO ET REPÉRAGE
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { photoPickerLauncher.launch("image/*") },
+                            modifier = Modifier.weight(1f).height(ActionHeight).testTag("load_photo_button"),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selectedImageUri == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = if (selectedImageUri == null) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.AddAPhoto, contentDescription = null, modifier = Modifier.size(22.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (selectedImageUri != null) "Changer la photo" else "Charger une photo",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
+
+                        if (selectedImageUri != null) {
+                            Button(
+                                onClick = { analyzeSelectedPhoto() },
+                                enabled = !isAnalyzingTarget,
+                                modifier = Modifier.weight(1f).height(ActionHeight).testTag("scan_target_button"),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondary,
+                                    contentColor = MaterialTheme.colorScheme.onSecondary
+                                )
+                            ) {
+                                if (isAnalyzingTarget) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSecondary)
+                                } else {
+                                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(22.dp))
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Repérer la cible", fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                        }
+                    }
+
+                    // 3. MODE DE POINTAGE
+                    ModeSelector(
+                        options = listOf(
+                            ModeOption(AnnotationMode.IMPACT, "Impacts", Icons.Default.AdsClick, Color(0xFFEF4444)),
+                            ModeOption(AnnotationMode.TARGET_CENTER, "Centre", Icons.Default.CenterFocusStrong, Color(0xFF10B981)),
+                            ModeOption(AnnotationMode.CALIBRATE, "Échelle", Icons.Default.Straighten, Color(0xFFF59E0B))
+                        ),
+                        selected = activeMode,
+                        onSelect = { mode ->
+                            activeMode = mode
+                            if (mode == AnnotationMode.CALIBRATE) {
+                                calibrationStep = when {
+                                    targetCenterPx == null -> CalibrationStep.SET_CENTER
+                                    calibrationEdgePx == null -> CalibrationStep.CLICK_EDGE
+                                    else -> CalibrationStep.CALIBRATED
+                                }
+                            }
+                        }
+                    )
+
+                    // Panneau d'assistance guidé à la calibration du visuel
+                    if (activeMode == AnnotationMode.CALIBRATE) RecomposeScope {
+                        CalibrationAssistantPanel(
+                            selectedReference = selectedCalibrationRef,
+                            onSelectReference = { ref ->
+                                selectedCalibrationRef = ref
+                                if (calibrationEdgePx != null && targetCenterPx != null) {
+                                    val rPx = hypot(calibrationEdgePx!!.x - targetCenterPx!!.x, calibrationEdgePx!!.y - targetCenterPx!!.y)
+                                    if (rPx > 5f && ref.radiusMm > 0f) {
+                                        pixelPerMm = rPx / ref.radiusMm
+                                    }
+                                }
+                            },
+                            currentStep = calibrationStep,
+                            onStepChange = { step -> calibrationStep = step },
+                            pixelPerMm = pixelPerMm,
+                            isCenterPlaced = targetCenterPx != null,
+                            onFinishCalibration = {
+                                activeMode = AnnotationMode.IMPACT
+                                Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+
+                    // 5. IMPACTS ET POINTS
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Impacts", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                                     Text(
-                                        text = "Impacts & Points (Ajustement)",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "Touchez un coup pour ajuster ses points ou son cordon",
-                                        style = MaterialTheme.typography.bodySmall,
+                                        text = if (impactsList.isEmpty()) "Aucun impact placé" else "${impactsList.size} coup${if (impactsList.size > 1) "s" else ""} · touchez-en un pour le corriger",
+                                        style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
+                                Column(horizontalAlignment = Alignment.End) {
                                     Text(
-                                        text = "${totalScore.value} pts (${innerTensCount.value}X)",
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        text = "${totalScore.value}",
+                                        fontSize = 30.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        lineHeight = 32.sp
+                                    )
+                                    Text(
+                                        text = if (innerTensCount.value > 0) "points · ${innerTensCount.value} mouche${if (innerTensCount.value > 1) "s" else ""}" else "points",
                                         style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
 
-                            val autoCount = impactsList.count { it.isAuto }
-                            if (autoCount > 0) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "$autoCount détecté${if (autoCount > 1) "s" else ""} automatiquement (cerclé${if (autoCount > 1) "s" else ""} de bleu), à vérifier",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color(0xFF38BDF8),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    TextButton(
-                                        onClick = {
-                                            val kept = impactsList.filter { !it.isAuto }.mapIndexed { i, imp -> imp.copy(index = i + 1) }
-                                            impactsList.clear()
-                                            impactsList.addAll(kept)
-                                        },
-                                        modifier = Modifier.testTag("remove_detected_impacts_button")
-                                    ) {
-                                        Text("Les retirer", fontSize = 11.sp)
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            if (impactsList.isEmpty()) {
-                                Text(
-                                    text = "Aucun impact enregistré. Touchez la cible pour ajouter des impacts.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            } else {
-                                LazyRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
+                            if (impactsList.isNotEmpty()) {
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     items(impactsList) { imp ->
                                         Surface(
-                                            shape = RoundedCornerShape(10.dp),
+                                            shape = RoundedCornerShape(12.dp),
                                             color = when {
                                                 imp.isFlyer -> MaterialTheme.colorScheme.surface
                                                 imp.isInnerTen -> Color(0xFF10B981).copy(alpha = 0.2f)
@@ -2085,8 +1892,12 @@ fun TirTrackerApp() {
                                                 else -> MaterialTheme.colorScheme.surface
                                             },
                                             border = androidx.compose.foundation.BorderStroke(
-                                                1.dp,
-                                                if (imp.isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.outlineVariant
+                                                if (imp.isAuto) 2.dp else 1.dp,
+                                                when {
+                                                    imp.isAuto -> Color(0xFF38BDF8)
+                                                    imp.isInnerTen -> Color(0xFF10B981)
+                                                    else -> MaterialTheme.colorScheme.outlineVariant
+                                                }
                                             ),
                                             modifier = Modifier
                                                 .clickable {
@@ -2095,92 +1906,117 @@ fun TirTrackerApp() {
                                                 }
                                                 .testTag("shot_chip_${imp.index}")
                                         ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                                verticalAlignment = Alignment.CenterVertically
+                                            Column(
+                                                modifier = Modifier.width(58.dp).padding(vertical = 8.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
                                             ) {
-                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                    Text("#${imp.index}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    Text(
-                                                        text = if (imp.isInnerTen) "10X" else "${imp.score}",
-                                                        fontWeight = FontWeight.Black,
-                                                        fontSize = 14.sp,
-                                                        color = if (imp.isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                }
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Icon(imageVector = Icons.Default.Edit, contentDescription = "Ajuster", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
+                                                Text("n° ${imp.index}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Text(
+                                                    text = if (imp.isInnerTen) "10X" else "${imp.score}",
+                                                    fontWeight = FontWeight.Black,
+                                                    fontSize = 20.sp,
+                                                    color = if (imp.isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurface
+                                                )
                                             }
                                         }
                                     }
                                 }
                             }
+
+                            val autoCount = impactsList.count { it.isAuto }
+                            if (autoCount > 0) {
+                                Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF38BDF8).copy(alpha = 0.12f)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "$autoCount détecté${if (autoCount > 1) "s" else ""} automatiquement, cerclé${if (autoCount > 1) "s" else ""} de bleu : vérifiez-les",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = Color(0xFF7DD3FC),
+                                            modifier = Modifier.weight(1f).padding(vertical = 8.dp)
+                                        )
+                                        TextButton(
+                                            onClick = {
+                                                val kept = impactsList.filter { !it.isAuto }.mapIndexed { i, imp -> imp.copy(index = i + 1) }
+                                                impactsList.clear()
+                                                impactsList.addAll(kept)
+                                            },
+                                            modifier = Modifier.heightIn(min = 48.dp).testTag("remove_detected_impacts_button")
+                                        ) {
+                                            Text("Les retirer", style = MaterialTheme.typography.labelLarge)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(
+                                    onClick = { detectImpactsOnPhoto() },
+                                    enabled = selectedImageUri != null && !isDetectingImpacts,
+                                    modifier = Modifier.weight(1f).height(52.dp).testTag("detect_impacts_button"),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    if (isDetectingImpacts) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (isDetectingImpacts) "Détection…" else "Détecter", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                }
+                                OutlinedButton(
+                                    onClick = { if (impactsList.isNotEmpty()) impactsList.removeAt(impactsList.lastIndex) },
+                                    enabled = impactsList.isNotEmpty(),
+                                    modifier = Modifier.weight(1f).height(52.dp).testTag("undo_last_impact_button"),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Icon(imageVector = Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Annuler", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                }
+                            }
                         }
                     }
 
-                    // 6. PANNEAU DE TÉLÉMÉTRIE BALISTIQUE
+                    // 6. GROUPEMENT
                     Card(
                         modifier = Modifier.fillMaxWidth().testTag("live_metrics_panel"),
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Groupement", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                                     Text(
-                                        text = "Télémétrie balistique (Groupement)",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "${weaponNameInput.ifBlank { "Tir" }} • ${impactsList.size} coup${if (impactsList.size > 1) "s" else ""} à ${distanceMeters.toInt()}m",
-                                        style = MaterialTheme.typography.bodySmall,
+                                        text = "${impactsList.count { !it.isFlyer }} coup${if (impactsList.count { !it.isFlyer } > 1) "s" else ""} retenus à ${distanceMeters.toInt()} m",
+                                        style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primary) {
+                                Column(horizontalAlignment = Alignment.End) {
                                     Text(
-                                        text = "${String.format(Locale.US, "%.2f", currentStats.moa)} MOA",
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = MaterialTheme.colorScheme.onPrimary
+                                        text = String.format(Locale.US, "%.2f", currentStats.moa),
+                                        fontSize = 30.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = MaterialTheme.colorScheme.secondary,
+                                        lineHeight = 32.sp
                                     )
+                                    Text("MOA", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Column {
-                                    Text("Écart Extrême (ES)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("${String.format(Locale.US, "%.1f", currentStats.esMm)} mm", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
-                                }
-                                Column {
-                                    Text("H + L", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("${String.format(Locale.US, "%.1f", currentStats.hPlusL)} mm", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                }
-                                Column {
-                                    Text("H (Hauteur)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("${String.format(Locale.US, "%.1f", currentStats.hMm)} mm", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                                }
-                                Column {
-                                    Text("L (Largeur)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("${String.format(Locale.US, "%.1f", currentStats.lMm)} mm", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                                }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                StatTile("Écart extrême", String.format(Locale.US, "%.1f", currentStats.esMm), "mm")
+                                StatTile("H + L", String.format(Locale.US, "%.1f", currentStats.hPlusL), "mm")
                             }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-                                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Dérive MPI", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                                    Text("ΔX = ${String.format(Locale.US, "%+.1f", currentStats.mpiDeltaXMm)} mm  |  ΔY = ${String.format(Locale.US, "%+.1f", currentStats.mpiDeltaYMm)} mm", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
-                                }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                StatTile("Hauteur", String.format(Locale.US, "%.1f", currentStats.hMm), "mm")
+                                StatTile("Largeur", String.format(Locale.US, "%.1f", currentStats.lMm), "mm")
+                            }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                StatTile("Décalage horizontal", String.format(Locale.US, "%+.1f", currentStats.mpiDeltaXMm), "mm", Color(0xFF38BDF8))
+                                StatTile("Décalage vertical", String.format(Locale.US, "%+.1f", currentStats.mpiDeltaYMm), "mm", Color(0xFF38BDF8))
                             }
                         }
                     }
@@ -2189,15 +2025,15 @@ fun TirTrackerApp() {
                     Button(
                         onClick = { saveSession() },
                         enabled = historyLoaded,
-                        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("save_session_button"),
-                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(ActionHeight).testTag("save_session_button"),
+                        shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Icon(imageVector = Icons.Default.Save, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Icon(imageVector = Icons.Default.Save, contentDescription = null, modifier = Modifier.size(22.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (editingSessionId != null) "Mettre à jour la séance" else "Enregistrer la séance",
-                            fontSize = 15.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -2220,29 +2056,21 @@ fun TirTrackerApp() {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Historique des séances",
+                                text = "Historique",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.ExtraBold
                             )
                             Text(
                                 text = "${savedSessionsList.size} séance${if (savedSessionsList.size > 1) "s" else ""} enregistrée${if (savedSessionsList.size > 1) "s" else ""}",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
-                        Row {
-                            IconButton(onClick = { showChartDialog = true }) {
-                                Icon(imageVector = Icons.Default.AutoGraph, contentDescription = "Graphique MOA", tint = MaterialTheme.colorScheme.secondary)
-                            }
-                            IconButton(
-                                onClick = {
-                                    saveHistory(emptyList())
-                                    Toast.makeText(context, "Historique réinitialisé.", Toast.LENGTH_SHORT).show()
-                                }
-                            ) {
+                        if (savedSessionsList.isNotEmpty()) {
+                            IconButton(onClick = { showClearHistoryDialog = true }, modifier = Modifier.size(48.dp)) {
                                 Icon(imageVector = Icons.Default.Delete, contentDescription = "Vider l'historique", tint = MaterialTheme.colorScheme.outline)
                             }
                         }
@@ -2257,25 +2085,26 @@ fun TirTrackerApp() {
                         placeholder = { Text("Rechercher par arme, cible, calibre...") },
                         leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) },
                         singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Filtres de distance
                     val distanceFilterOptions = listOf("Toutes", "10m", "25m", "50m", "100m", "200m+")
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(distanceFilterOptions) { f ->
                             FilterChip(
                                 selected = historyDistanceFilter == f,
                                 onClick = { historyDistanceFilter = f },
-                                label = { Text(f, fontSize = 11.sp) }
+                                label = { Text(if (f == "Toutes") "Toutes distances" else f, style = MaterialTheme.typography.labelLarge) },
+                                modifier = Modifier.height(44.dp)
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     // Filtrage des séances
                     val filteredSessions = remember(savedSessionsList, historySearchQuery, historyDistanceFilter) {
@@ -2318,104 +2147,65 @@ fun TirTrackerApp() {
                             modifier = Modifier.fillMaxSize()
                         ) {
                             items(filteredSessions) { s ->
+                                val score = s.optInt("totalScore", 0)
+                                val inTens = s.optInt("innerTens", 0)
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable { loadSessionForRetroactiveAdjustment(s) },
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = RoundedCornerShape(16.dp),
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                                 ) {
-                                    Column(modifier = Modifier.padding(14.dp)) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Column {
+                                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                                            Column(modifier = Modifier.weight(1f)) {
                                                 Text(
                                                     text = s.optString("title", "Séance"),
                                                     style = MaterialTheme.typography.titleMedium,
-                                                    fontWeight = FontWeight.Bold
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
                                                 )
                                                 Text(
                                                     text = s.optString("date", ""),
-                                                    style = MaterialTheme.typography.labelSmall,
+                                                    style = MaterialTheme.typography.bodyMedium,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
-
-                                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                                // Score Pill
-                                                Surface(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = Color(0xFF10B981).copy(alpha = 0.2f)
-                                                ) {
-                                                    val score = s.optInt("totalScore", 0)
-                                                    val inTens = s.optInt("innerTens", 0)
-                                                    Text(
-                                                        text = "$score pts${if (inTens > 0) " (${inTens}X)" else ""}",
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = Color(0xFF10B981)
-                                                    )
-                                                }
-
-                                                // MOA Pill
-                                                Surface(
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    color = MaterialTheme.colorScheme.primaryContainer
-                                                ) {
-                                                    Text(
-                                                        text = "${String.format(Locale.US, "%.2f", s.optDouble("moa", 0.0))} MOA",
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                                    )
-                                                }
+                                            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 12.dp)) {
+                                                Text("$score", fontSize = 26.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary, lineHeight = 28.sp)
+                                                Text(
+                                                    text = if (inTens > 0) "pts · ${inTens}X" else "points",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
                                             }
                                         }
-
-                                        Spacer(modifier = Modifier.height(6.dp))
 
                                         Text(
-                                            text = "${s.optString("weapon", "Arme")} (${s.optString("caliber", "")}) • ${s.optString("targetType", "C50")} à ${s.optDouble("distanceMeters", 50.0).toInt()}m",
+                                            text = listOf(
+                                                "${s.optString("targetType", "C50").substringBefore(" (")} à ${s.optDouble("distanceMeters", 50.0).toInt()} m",
+                                                s.optString("weapon", ""),
+                                                s.optString("caliber", "")
+                                            ).filter { it.isNotBlank() }.joinToString(" · "),
                                             style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
                                         )
 
-                                        if (s.optString("ammo").isNotBlank()) {
-                                            Text(
-                                                text = "Munitions : ${s.optString("ammo")}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            HistoryPill("${String.format(Locale.US, "%.2f", s.optDouble("moa", 0.0))} MOA", MaterialTheme.colorScheme.secondary)
+                                            HistoryPill("ES ${String.format(Locale.US, "%.1f", s.optDouble("esMm", 0.0))} mm", MaterialTheme.colorScheme.onSurfaceVariant)
+                                            HistoryPill("${s.optInt("shotsCount", 0)} coups", MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Spacer(modifier = Modifier.weight(1f))
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = "Corriger la séance",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(22.dp)
                                             )
-                                        }
-
-                                        Spacer(modifier = Modifier.height(4.dp))
-
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "ES: ${String.format(Locale.US, "%.1f", s.optDouble("esMm", 0.0))} mm | ${s.optInt("shotsCount", 0)} coups",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.secondary,
-                                                fontWeight = FontWeight.Bold
-                                            )
-
-                                            OutlinedButton(
-                                                onClick = { loadSessionForRetroactiveAdjustment(s) },
-                                                contentPadding = ButtonDefaults.TextButtonContentPadding,
-                                                shape = RoundedCornerShape(8.dp)
-                                            ) {
-                                                Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(12.dp))
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text("Ajuster les points", fontSize = 11.sp)
-                                            }
                                         }
                                     }
                                 }
@@ -2429,6 +2219,145 @@ fun TirTrackerApp() {
                 // Coffre d'armes (Accessible via navigation)
             }
         }
+    }
+
+    // PANNEAU: Paramètres de la séance
+    if (showSessionSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showSessionSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Paramètres de la séance", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                }
+                OutlinedButton(
+                    onClick = { showWeaponsDialog = true },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.secondary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Choisir dans mes armes (${weaponsList.size})", fontSize = 15.sp, color = MaterialTheme.colorScheme.secondary)
+                }
+                    // Titre de séance
+                    OutlinedTextField(
+                        value = sessionTitleInput,
+                        onValueChange = { sessionTitleInput = it },
+                        label = { Text("Titre de la séance") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    // Type de cible avec Reconnaissance Auto Badge
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Type de cible", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (detectedTargetResult?.visualFound == true) {
+                            Text(
+                                text = "🎯 Visuel repéré",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    }
+
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(targetTypeOptions) { target ->
+                            FilterChip(
+                                selected = targetTypeInput == target,
+                                onClick = {
+                                    targetTypeInput = target
+                                    if (target.contains("10m")) distanceInput = "10"
+                                    else if (target.contains("200m")) distanceInput = "200"
+                                },
+                                label = { Text(target, style = MaterialTheme.typography.labelLarge) },
+                                modifier = Modifier.height(44.dp)
+                            )
+                        }
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = weaponNameInput,
+                            onValueChange = { weaponNameInput = it },
+                            label = { Text("Arme") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1.3f),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+
+                        OutlinedTextField(
+                            value = weaponCaliberInput,
+                            onValueChange = { weaponCaliberInput = it },
+                            label = { Text("Calibre") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = distanceInput,
+                            onValueChange = { distanceInput = it },
+                            label = { Text("Distance (m)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(0.9f),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+
+                        OutlinedTextField(
+                            value = ammoInput,
+                            onValueChange = { ammoInput = it },
+                            label = { Text("Munitions (marque/grain)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1.5f),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                    }
+                Button(
+                    onClick = { showSessionSheet = false },
+                    modifier = Modifier.fillMaxWidth().height(ActionHeight),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Valider", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+
+    // DIALOG: Vider l'historique
+    if (showClearHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearHistoryDialog = false },
+            title = { Text("Vider l'historique ?") },
+            text = { Text("Les ${savedSessionsList.size} séances enregistrées seront supprimées définitivement.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        saveHistory(emptyList())
+                        showClearHistoryDialog = false
+                        Toast.makeText(context, "Historique vidé.", Toast.LENGTH_SHORT).show()
+                    }
+                ) { Text("Tout supprimer", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showClearHistoryDialog = false }) { Text("Annuler") } }
+        )
     }
 
     // DIALOG: Armory Dialog
@@ -2660,3 +2589,16 @@ fun TirTrackerApp() {
  */
 @Composable
 private fun RecomposeScope(content: @Composable () -> Unit) = content()
+
+@Composable
+private fun HistoryPill(text: String, color: Color) {
+    Surface(shape = RoundedCornerShape(10.dp), color = color.copy(alpha = 0.14f)) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = color
+        )
+    }
+}

@@ -13,7 +13,7 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
   - Dans le noir, un impact est une tache plus claire que l'encre ; sur le blanc, une tache qui s'écarte de la couleur locale du papier ; sur une cible réactive, le halo jaune.
   - La taille d'un impact isolé est mesurée sur la photo elle-même, ce qui permet de séparer les impacts qui se chevauchent.
   - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés. Un impact qui touche un chiffre est conservé : un chiffre n'a que des traits fins, un impact a un cœur plein.
-  - Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter impacts » relance la recherche sans dupliquer ceux déjà placés.
+  - Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter » de la carte Impacts relance la recherche sans dupliquer ceux déjà placés.
 - **Score automatique** selon le type de cible (C50, pistolet 10 m, carabine 10 m, C200), avec mouches (10X).
 - **Ajustement a posteriori** : pour chaque coup, correction des points, cordon ±1, recalage au millimètre, exclusion des « flyers », suppression.
 - **Télémétrie du groupement** : écart extrême (ES), hauteur, largeur, H+L, MOA et dérive du point moyen d'impact.
@@ -72,6 +72,12 @@ Pour juger la détection sur de vraies photos, un outil annote chaque photo d'un
 ```bash
 TARGET_PHOTOS=/chemin/vers/photos ./gradlew testDebugUnitTest --tests '*RealPhotoHarnessTest*'
 # résultat dans /chemin/vers/photos/annotated (ou dans TARGET_PHOTOS_OUT)
+```
+
+Pour revoir l'interface sans téléphone, un outil fait des captures des écrans (pas de tir, avec impacts, paramètres de séance, historique) :
+
+```bash
+SCREENSHOTS_OUT=/chemin/vers/captures ./gradlew testDebugUnitTest --tests '*ScreenshotTest*'
 ```
 
 ## Intégration continue
