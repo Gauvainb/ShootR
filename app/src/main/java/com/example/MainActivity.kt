@@ -124,6 +124,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -1804,43 +1807,7 @@ fun TirTrackerApp() {
                             }
 
                             if (impactsList.isNotEmpty()) {
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(impactsList) { imp ->
-                                        Surface(
-                                            shape = RoundedCornerShape(12.dp),
-                                            color = when {
-                                                imp.isFlyer -> MaterialTheme.colorScheme.surface
-                                                imp.isInnerTen -> Color(0xFF10B981).copy(alpha = 0.2f)
-                                                imp.score >= 9 -> Color(0xFFFBBF24).copy(alpha = 0.2f)
-                                                else -> MaterialTheme.colorScheme.surface
-                                            },
-                                            border = androidx.compose.foundation.BorderStroke(
-                                                if (imp.isAuto) 2.dp else 1.dp,
-                                                when {
-                                                    imp.isAuto -> Color(0xFF38BDF8)
-                                                    imp.isInnerTen -> Color(0xFF10B981)
-                                                    else -> MaterialTheme.colorScheme.outlineVariant
-                                                }
-                                            ),
-                                            modifier = Modifier
-                                                .clickable { selectImpact(imp.index - 1) }
-                                                .testTag("shot_chip_${imp.index}")
-                                        ) {
-                                            Column(
-                                                modifier = Modifier.width(58.dp).padding(vertical = 8.dp),
-                                                horizontalAlignment = Alignment.CenterHorizontally
-                                            ) {
-                                                Text("n° ${imp.index}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                Text(
-                                                    text = if (imp.isInnerTen) "10X" else "${imp.score}",
-                                                    fontWeight = FontWeight.Black,
-                                                    fontSize = 20.sp,
-                                                    color = if (imp.isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+                                ShotTable(shots = impactsList, onSelect = { selectImpact(it.index - 1) })
                             }
 
                             val autoCount = impactsList.count { it.isAuto }
@@ -1851,7 +1818,7 @@ fun TirTrackerApp() {
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "$autoCount détecté${if (autoCount > 1) "s" else ""} automatiquement, cerclé${if (autoCount > 1) "s" else ""} de bleu : vérifiez-les",
+                                            text = "$autoCount détecté${if (autoCount > 1) "s" else ""} automatiquement (point bleu) : vérifiez-les",
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = Color(0xFF7DD3FC),
                                             modifier = Modifier.weight(1f).padding(vertical = 8.dp)
@@ -2561,6 +2528,78 @@ private fun ImpactEditPanel(
                     shape = RoundedCornerShape(14.dp)
                 ) {
                     Text("Terminé", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Every shot at a glance, without scrolling sideways: a compact table of "n° | points" pairs,
+ * three per row. A cell opens the correction of its shot.
+ */
+@Composable
+private fun ShotTable(shots: List<ScreenImpact>, onSelect: (ScreenImpact) -> Unit, columns: Int = 3) {
+    val line = MaterialTheme.colorScheme.outlineVariant
+    val cellText = MaterialTheme.typography.bodyMedium
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, line),
+        modifier = Modifier.fillMaxWidth().testTag("shot_table")
+    ) {
+        Column {
+            // Header
+            Row(modifier = Modifier.fillMaxWidth().height(30.dp), verticalAlignment = Alignment.CenterVertically) {
+                repeat(columns) { c ->
+                    if (c > 0) Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(line))
+                    Row(modifier = Modifier.weight(1f).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("N°", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(30.dp))
+                        Text("Points", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            shots.chunked(columns).forEach { row ->
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(line))
+                Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
+                    repeat(columns) { c ->
+                        if (c > 0) Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(line))
+                        val shot = row.getOrNull(c)
+                        if (shot == null) {
+                            Spacer(modifier = Modifier.weight(1f).height(40.dp))
+                        } else {
+                            val scoreColor = when {
+                                shot.isFlyer -> MaterialTheme.colorScheme.outline
+                                shot.isInnerTen -> Color(0xFF10B981)
+                                shot.score >= 9 -> Color(0xFFFBBF24)
+                                else -> MaterialTheme.colorScheme.onSurface
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clickable { onSelect(shot) }
+                                    .padding(horizontal = 10.dp)
+                                    .testTag("shot_chip_${shot.index}"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("${shot.index}", style = cellText, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(30.dp))
+                                Text(
+                                    text = if (shot.isInnerTen) "10X" else "${shot.score} pts",
+                                    style = cellText,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = scoreColor,
+                                    textDecoration = if (shot.isFlyer) TextDecoration.LineThrough else null,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1
+                                )
+                                if (shot.isAuto) {
+                                    // Detected automatically, not checked yet (circled in blue on the target).
+                                    Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF38BDF8)))
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

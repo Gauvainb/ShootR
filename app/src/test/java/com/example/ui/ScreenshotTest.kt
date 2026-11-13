@@ -112,13 +112,14 @@ class ScreenshotTest {
     }
 
     @Test
-    @Config(qualifiers = "w393dp-h852dp-xxhdpi")
+    @Config(qualifiers = "w393dp-h1600dp-xxhdpi")
     fun step3Impacts() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
         rule.onNodeWithTag("next_to_target_button").performClick()
         rule.onNodeWithTag("next_to_impacts_button").performClick()
         val canvas = rule.onNodeWithTag("target_photo_canvas")
-        listOf(0.5f to 0.5f, 0.6f to 0.4f, 0.4f to 0.6f, 0.65f to 0.62f, 0.3f to 0.7f).forEach { (x, y) ->
+        // 14 shots spread over the target, enough to fill several rows of the shot table.
+        (0 until 14).map { i -> Pair(0.2f + 0.6f * ((i * 37) % 14) / 14f, 0.2f + 0.6f * ((i * 53) % 14) / 14f) }.forEach { (x, y) ->
             canvas.performTouchInput { click(Offset(width * x, height * y)) }
         }
         save("3_impacts")
