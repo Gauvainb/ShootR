@@ -68,7 +68,6 @@ fun CalibrationAssistantPanel(
     onStepChange: (CalibrationStep) -> Unit,
     pixelPerMm: Float,
     isCenterPlaced: Boolean,
-    onFinishCalibration: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -126,172 +125,137 @@ fun CalibrationAssistantPanel(
 
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Header with Reference Selector
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Straighten,
-                        contentDescription = null,
-                        tint = Color(0xFFFBBF24),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Étalonnage par visuel cible",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFFBBF24)
-                    )
-                }
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = "Réglage manuel",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
 
-                // Reference selection menu
-                ExposedDropdownMenuBox(
-                    expanded = menuExpanded,
-                    onExpandedChange = { menuExpanded = !menuExpanded }
+            // What the edge of the ring is measured against
+            ExposedDropdownMenuBox(
+                expanded = menuExpanded,
+                onExpandedChange = { menuExpanded = !menuExpanded }
+            ) {
+                OutlinedButton(
+                    onClick = { menuExpanded = true },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().height(52.dp).menuAnchor()
                 ) {
-                    OutlinedButton(
-                        onClick = { menuExpanded = true },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = ButtonDefaults.TextButtonContentPadding,
-                        modifier = Modifier.menuAnchor()
-                    ) {
-                        Text(
-                            text = selectedReference.shortName,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuExpanded)
-                    }
-                    ExposedDropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false }
-                    ) {
-                        TargetCalibrationDefaults.references.forEach { ref ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(ref.label, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                        Text(ref.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    if (ref.id == "custom") {
-                                        showCustomDialog = true
-                                    } else {
-                                        onSelectReference(ref)
-                                    }
-                                }
-                            )
-                        }
-                    }
+                    Icon(imageVector = Icons.Default.Straighten, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Repère : ${selectedReference.label}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuExpanded)
                 }
-            }
-
-            // Step Indicators & Guided Text
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surface
-            ) {
-                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        FilterChip(
-                            selected = currentStep == CalibrationStep.SET_CENTER,
-                            onClick = { onStepChange(CalibrationStep.SET_CENTER) },
-                            label = { Text("1. Centre (vert)", fontSize = 11.sp) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.CenterFocusStrong,
-                                    contentDescription = null,
-                                    tint = if (isCenterPlaced) Color(0xFF10B981) else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        FilterChip(
-                            selected = currentStep == CalibrationStep.CLICK_EDGE || currentStep == CalibrationStep.CALIBRATED,
-                            onClick = { onStepChange(CalibrationStep.CLICK_EDGE) },
-                            label = { Text("2. Bord (${selectedReference.diameterMm.toInt()} mm)", fontSize = 11.sp) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.RadioButtonUnchecked,
-                                    contentDescription = null,
-                                    tint = if (pixelPerMm > 0f) Color(0xFFFBBF24) else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            },
-                            modifier = Modifier.weight(1.3f)
-                        )
-                    }
-
-                    // Instruction banner based on current step
-                    when (currentStep) {
-                        CalibrationStep.SET_CENTER -> {
-                            Text(
-                                text = "🎯 Touchez ou maintenez le doigt appuyé pour positionner précisément la croix verte au centre. (Défilement photo à 2 doigts)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        CalibrationStep.CLICK_EDGE -> {
-                            Text(
-                                text = "📏 Touchez ou glissez le doigt pour ajuster le diamètre du visuel (${selectedReference.diameterMm.toInt()} mm). Défilement photo à 2 doigts.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFFBBF24),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        CalibrationStep.CALIBRATED -> {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "✅ Étalonné : visuel ${selectedReference.diameterMm.toInt()} mm (${String.format(Locale.US, "%.2f", pixelPerMm)} px/mm)",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF10B981),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "Glissez le doigt sur l'anneau pour réajuster ou validez.",
-                                        fontSize = 10.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                ExposedDropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    TargetCalibrationDefaults.references.forEach { ref ->
+                        DropdownMenuItem(
+                            text = {
+                                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                    Text(ref.label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
+                                    Text(ref.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-
-                                Button(
-                                    onClick = onFinishCalibration,
-                                    contentPadding = ButtonDefaults.TextButtonContentPadding,
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                                ) {
-                                    Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Passer aux impacts", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                if (ref.id == "custom") {
+                                    showCustomDialog = true
+                                } else {
+                                    onSelectReference(ref)
                                 }
                             }
-                        }
+                        )
                     }
                 }
             }
+
+            // Which handle the finger moves
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CalibrationStepButton(
+                    label = "Centre",
+                    icon = Icons.Default.CenterFocusStrong,
+                    color = Color(0xFF10B981),
+                    selected = currentStep == CalibrationStep.SET_CENTER,
+                    done = isCenterPlaced,
+                    onClick = { onStepChange(CalibrationStep.SET_CENTER) },
+                    modifier = Modifier.weight(1f)
+                )
+                CalibrationStepButton(
+                    label = "Bord",
+                    icon = Icons.Default.RadioButtonUnchecked,
+                    color = Color(0xFFFBBF24),
+                    selected = currentStep != CalibrationStep.SET_CENTER,
+                    done = pixelPerMm > 0f,
+                    onClick = { onStepChange(CalibrationStep.CLICK_EDGE) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Text(
+                text = when (currentStep) {
+                    CalibrationStep.SET_CENTER -> "Touchez le centre de la cible ou faites glisser la croix verte."
+                    CalibrationStep.CLICK_EDGE -> "Faites glisser jusqu'au bord du ${selectedReference.shortName.lowercase()} (${formatMm(selectedReference.diameterMm)} mm)."
+                    CalibrationStep.CALIBRATED -> "Échelle réglée. Faites glisser la poignée jaune si le cercle ne suit pas le bord du visuel."
+                },
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "Deux doigts pour zoomer et déplacer la photo.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
+    }
+}
+
+private fun formatMm(value: Float): String =
+    if (value % 1f == 0f) value.toInt().toString() else String.format(Locale.FRANCE, "%.1f", value)
+
+@Composable
+private fun CalibrationStepButton(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    color: Color,
+    selected: Boolean,
+    done: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.height(52.dp),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(if (selected) 2.dp else 1.dp, if (selected) color else MaterialTheme.colorScheme.outlineVariant),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) color.copy(alpha = 0.18f) else Color.Transparent
+        )
+    ) {
+        Icon(
+            imageVector = if (done && !selected) Icons.Default.Check else icon,
+            contentDescription = null,
+            tint = if (selected || done) color else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1
+        )
     }
 }

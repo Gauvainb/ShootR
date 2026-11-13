@@ -127,6 +127,36 @@ object TargetRecognitionEngine {
         }
     }
 
+    /**
+     * Locates the target's circles on the photo, so that hits are scored against the rings that
+     * are really there (perspective, curved paper).
+     *
+     * @param centerNormalized calibrated center, normalized to the photo
+     * @param visualRadiusNormalized calibrated radius of the black visual, as a fraction of the photo width
+     */
+    suspend fun buildRingModel(
+        context: Context,
+        imageUri: Uri,
+        centerNormalized: Offset,
+        visualRadiusNormalized: Float,
+        visualRadiusMm: Float,
+        targetType: String
+    ): RingModel? = withContext(Dispatchers.Default) {
+        try {
+            val image = loadLuma(context, imageUri, reqSize = 800) ?: return@withContext null
+            RingModel.build(
+                image,
+                centerX = centerNormalized.x * image.width,
+                centerY = centerNormalized.y * image.height,
+                visualRadiusPx = visualRadiusNormalized * image.width,
+                visualRadiusMm = visualRadiusMm,
+                printedRingsMm = TargetScoring.printedRingRadiiMm(targetType)
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     internal fun analyzeLuma(image: LumaImage, targetType: String, visualDiameterMm: Float?): TargetDetectionResult {
         if (visualDiameterMm == null || visualDiameterMm <= 0f) return noVisual(targetType)
         val aspectRatio = image.width.toFloat() / image.height

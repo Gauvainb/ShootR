@@ -51,9 +51,24 @@ class RealPhotoHarnessTest {
                     )
                 )
             }
+            val rings = circle?.let {
+                RingModel.build(image, it.centerX, it.centerY, it.radius, spec.blackVisualDiameterMm / 2f, TargetScoring.printedRingRadiiMm("C50 (25m/50m)"))
+            }
+            val table = TargetScoring.tableFor("C50 (25m/50m)")
+            val scores = impacts.map { p ->
+                val x = p.x * image.width
+                val y = p.y * image.height
+                val byRings = rings?.let { table.score(it.distanceMm(x, y)).first }
+                val byCircle = circle?.let {
+                    table.score(kotlin.math.hypot(x - it.centerX, y - it.centerY) / (it.radius / (spec.blackVisualDiameterMm / 2f))).first
+                }
+                Pair(byRings, byCircle)
+            }
+            val changed = scores.count { it.first != it.second }
+            println("SCORES ${file.name}: ${scores.size} impacts, $changed scored differently with the rings")
             val elapsedMs = (System.nanoTime() - started) / 1_000_000
             println("PHOTO ${file.name}: ${image.width}x${image.height} radius=${circle?.radius?.toInt()} impacts=${impacts.size} ${elapsedMs}ms")
-            annotate(photo, circle, impacts, rejected, File(outputDir, file.nameWithoutExtension + ".jpg"))
+            annotate(photo, circle, impacts, rejected, File(outputDir, file.nameWithoutExtension + ".jpg"), rings, scores)
         }
         montage(outputDir)
     }
@@ -119,7 +134,9 @@ class RealPhotoHarnessTest {
         circle: VisualCircle?,
         impacts: List<Offset>,
         rejected: List<Triple<Float, Float, String>>,
-        out: File
+        out: File,
+        rings: RingModel? = null,
+        scores: List<Pair<Int?, Int?>> = emptyList()
     ) {
         val canvas = BufferedImage(photo.width, photo.height, BufferedImage.TYPE_INT_RGB)
         val g = canvas.createGraphics()
@@ -134,6 +151,37 @@ class RealPhotoHarnessTest {
             g.drawLine((cx - 30).toInt(), cy.toInt(), (cx + 30).toInt(), cy.toInt())
             g.drawLine(cx.toInt(), (cy - 30).toInt(), cx.toInt(), (cy + 30).toInt())
         }
+        // Rings as located on the photo, ray by ray (green), with the score of each impact:
+        // "a/b" when the rings (a) and a single circle (b) disagree.
+        if (rings != null) {
+            g.color = Color(0, 255, 120)
+            g.stroke = BasicStroke(2f)
+            val n = 360
+            val pts = (0..n).map { i ->
+                val a = 2 * Math.PI * i / n
+                Pair(a, rings.circlesAt(a))
+            }
+            val count = pts[0].second.size
+            for (k in 0 until count) {
+                for (i in 0 until n) {
+                    val (a0, r0) = pts[i]
+                    val (a1, r1) = pts[i + 1]
+                    g.drawLine(
+                        (rings.centerX + Math.cos(a0) * r0[k]).toInt(), (rings.centerY + Math.sin(a0) * r0[k]).toInt(),
+                        (rings.centerX + Math.cos(a1) * r1[k]).toInt(), (rings.centerY + Math.sin(a1) * r1[k]).toInt()
+                    )
+                }
+            }
+            g.stroke = BasicStroke(3f)
+        }
+        g.font = g.font.deriveFont(java.awt.Font.BOLD, 20f)
+        impacts.forEachIndexed { i, p ->
+            val (a, b) = scores.getOrNull(i) ?: return@forEachIndexed
+            val label = if (a == b) "$a" else "$a/$b"
+            g.color = if (a == b) Color.WHITE else Color.YELLOW
+            g.drawString(label, p.x * photo.width + 14, p.y * photo.height - 10)
+        }
+        g.stroke = BasicStroke(3f)
         // Blobs that were considered and dropped, with the reason.
         g.color = Color(255, 140, 0)
         g.font = g.font.deriveFont(15f)
