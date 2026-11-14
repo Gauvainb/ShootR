@@ -6,13 +6,17 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
 
 ## Fonctionnalités
 
+L'application s'ouvre sur un **écran d'accueil** : un grand bouton « Nouvelle séance », puis Historique, Râtelier et Analyses, avec un rappel de la dernière séance. Une séance commencée et non enregistrée peut être reprise depuis l'accueil.
+
+La barre du bas donne accès aux mêmes sections (Séance, Historique, Râtelier, Analyses), avec un bouton Accueil rond au milieu. Le bouton retour du téléphone ramène à l'accueil.
+
 Une séance s'enregistre en trois étapes, chacune sur son propre écran :
 
 1. **Séance** : titre, type de cible, arme, calibre, distance, munitions.
 2. **Cible** : chargement de la photo, repérage automatique du visuel, puis vérification et réglage du centre et de l'échelle. C'est le seul écran où la calibration peut changer. On peut aussi continuer sans photo.
 3. **Impacts** : détection automatique à la première arrivée, correction coup par coup, score et groupement, enregistrement.
 
-On revient à une étape précédente avec « Retour » ou en touchant l'étape dans l'indicateur en haut.
+On revient à une étape précédente avec « Retour » ou en touchant l'étape dans l'indicateur en haut. Après « Enregistrer », l'application affiche l'historique, où figure la séance, et la prochaine séance repart d'une fiche vierge (arme et munition conservées).
 
 - **Pointage sur photo** : chargez la photo d'une cible, puis touchez ou glissez pour placer chaque impact. Zoom et déplacement à deux doigts.
 - **Calibration assistée** : placez le centre, puis ajustez un anneau sur un repère de diamètre connu (visuel noir C50 de 200 mm, carabine 10 m de 30,5 mm, pistolet 10 m de 59,5 mm, C200 de 400 mm, ou diamètre personnalisé) pour obtenir l'échelle en px/mm.
@@ -27,8 +31,8 @@ On revient à une étape précédente avec « Retour » ou en touchant l'étape 
 - **Correction coup par coup, sur la photo** : toucher un coup (sur la cible ou dans le tableau) zoome la cible dessus ; l'impact s'affiche alors en croix ajourée pour laisser voir le trou. On le fait glisser, on touche l'endroit exact du trou, ou on le recale au millimètre. On peut aussi l'exclure du groupement (coup de doigt) ou le supprimer. Les points ne se saisissent pas : ils sont toujours calculés d'après la zone touchée.
 - **Télémétrie du groupement** : écart extrême (ES), hauteur, largeur, H+L, MOA et dérive du point moyen d'impact.
 - **Historique** : recherche, filtre par distance, réouverture d'une séance pour la corriger.
-- **Évolution de la précision** : graphique du MOA par séance (courbe ou histogramme), filtrable par arme.
-- **Bibliothèque d'armes** pour pré-remplir une séance.
+- **Analyses** : graphique du MOA par séance (courbe ou histogramme), filtrable par arme.
+- **Râtelier** : liste des armes et des munitions, ajout et suppression. Les boutons « Mes armes » et « Mes munitions » de l'étape Séance pré-remplissent le formulaire (les munitions du calibre de l'arme en premier).
 
 Le repérage et la détection reposent sur une analyse d'image locale, sans modèle d'IA ni appel réseau. Leurs résultats sont des propositions à vérifier.
 
@@ -83,7 +87,7 @@ TARGET_PHOTOS=/chemin/vers/photos ./gradlew testDebugUnitTest --tests '*RealPhot
 # résultat dans /chemin/vers/photos/annotated (ou dans TARGET_PHOTOS_OUT)
 ```
 
-Pour revoir l'interface sans téléphone, un outil fait des captures des écrans (pas de tir, avec impacts, paramètres de séance, historique) :
+Pour revoir l'interface sans téléphone, un outil fait des captures des écrans (accueil, étapes de la séance, historique, râtelier, analyses) :
 
 ```bash
 SCREENSHOTS_OUT=/chemin/vers/captures ./gradlew testDebugUnitTest --tests '*ScreenshotTest*'
@@ -97,9 +101,9 @@ Le workflow `.github/workflows/build-apk.yml` s'exécute sur chaque push ou pull
 
 ```
 app/src/main/java/com/example/
-├── MainActivity.kt                 Écran principal : pas de tir, historique, dialogues
+├── MainActivity.kt                 État de l'appli, navigation, étapes de la séance, historique, dialogues
 ├── data/
-│   └── LocalJsonStore.kt           Lecture/écriture de l'historique et des armes
+│   └── LocalJsonStore.kt           Lecture/écriture de l'historique, des armes et des munitions
 ├── domain/
 │   ├── BallisticsCalculator.kt     ES, H, L, H+L, MOA, point moyen, clics de correction
 │   ├── BlackVisualFinder.kt        Repérage du visuel noir (centre, rayon)
@@ -108,6 +112,7 @@ app/src/main/java/com/example/
 │   ├── TargetRecognitionEngine.kt  Décodage de la photo, point d'entrée de l'analyse
 │   └── TargetSpecs.kt              Dimensions des cibles, diamètre des calibres
 └── ui/components/
+    ├── AppScreens.kt               Accueil, râtelier, analyses, barre de navigation
     ├── CalibrationAssistantPanel.kt
     └── MoaProgressionChart.kt
 ```
@@ -121,9 +126,10 @@ Technologies : Kotlin, Jetpack Compose (Material 3), Coil pour l'affichage des p
 Les données sont stockées dans le répertoire privé de l'application :
 
 - `sessions_history.json` : séances enregistrées, avec leurs impacts et statistiques ;
-- `weapons_library.json` : bibliothèque d'armes.
+- `weapons_library.json` : armes du râtelier ;
+- `ammo_library.json` : munitions du râtelier.
 
-Au premier lancement, quelques séances et armes d'exemple sont créées. Désinstaller l'application supprime ces fichiers.
+Au premier lancement, quelques séances, armes et munitions d'exemple sont créées. Désinstaller l'application supprime ces fichiers.
 
 ## Limites connues
 

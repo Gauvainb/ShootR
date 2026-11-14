@@ -73,10 +73,37 @@ class ScreenshotTest {
         File(dir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
+    /** From the home screen to step 1 of a new session. */
+    private fun openNewSession() {
+        rule.onNodeWithTag("home_new_session").performClick()
+        rule.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w393dp-h852dp-xxhdpi")
+    fun home() {
+        assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
+        rule.waitForIdle()
+        save("0_accueil")
+    }
+
+    @Test
+    @Config(qualifiers = "w393dp-h852dp-xxhdpi")
+    fun armoryAndAnalysis() {
+        assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
+        rule.onNodeWithTag("nav_armory").performClick()
+        save("ratelier_armes")
+        rule.onNodeWithText("Munitions (5)").performClick()
+        save("ratelier_munitions")
+        rule.onNodeWithTag("nav_analysis").performClick()
+        save("analyses")
+    }
+
     @Test
     @Config(qualifiers = "w393dp-h852dp-xxhdpi")
     fun step1Session() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
+        openNewSession()
         save("1_seance")
     }
 
@@ -84,6 +111,7 @@ class ScreenshotTest {
     @Config(qualifiers = "w393dp-h852dp-xxhdpi")
     fun step2TargetWithoutPhoto() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
+        openNewSession()
         rule.onNodeWithTag("next_to_target_button").performClick()
         save("2_cible_sans_photo")
     }
@@ -94,6 +122,7 @@ class ScreenshotTest {
     fun step2TargetWithPhoto() {
         val photo = System.getenv("SCREENSHOTS_PHOTO")
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null && photo != null)
+        openNewSession()
         rule.onNodeWithTag("next_to_target_button").performClick()
         rule.onNodeWithTag("load_photo_button").performClick()
         rule.waitForIdle()
@@ -115,6 +144,7 @@ class ScreenshotTest {
     @Config(qualifiers = "w393dp-h1600dp-xxhdpi")
     fun step3Impacts() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
+        openNewSession()
         rule.onNodeWithTag("next_to_target_button").performClick()
         rule.onNodeWithTag("next_to_impacts_button").performClick()
         val canvas = rule.onNodeWithTag("target_photo_canvas")
@@ -125,13 +155,17 @@ class ScreenshotTest {
         save("3_impacts")
         rule.onNodeWithTag("shot_chip_2").performClick()
         save("3_coup")
+        rule.onNodeWithText("Terminé").performClick()
+        rule.onNodeWithTag("save_session_button").performClick()
+        rule.waitForIdle()
+        save("apres_enregistrement")
     }
 
     @Test
     @Config(qualifiers = "w393dp-h852dp-xxhdpi")
     fun history() {
         assumeTrue(System.getenv("SCREENSHOTS_OUT") != null)
-        rule.onNodeWithText("Historique").performClick()
+        rule.onNodeWithTag("nav_history").performClick()
         save("historique")
     }
 

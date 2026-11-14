@@ -124,6 +124,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.example.ui.components.HomeSummary
+import com.example.ui.components.HomeScreen
+import com.example.ui.components.ArmoryScreen
+import com.example.ui.components.ArmoryRow
+import com.example.ui.components.AppBottomBar
+import com.example.ui.components.AnalysisScreen
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -214,10 +223,13 @@ enum class ShootingStep {
     IMPACTS
 }
 
+/** Sections of the app, in the order of the bottom bar (home in the middle). */
 enum class AppTab {
     SHOOTING_RANGE,
     HISTORY,
-    ARMORY
+    HOME,
+    ARMORY,
+    ANALYSIS
 }
 
 data class ScreenImpact(
@@ -229,6 +241,13 @@ data class ScreenImpact(
     val isFlyer: Boolean = false,
     // Placed by the automatic detection and not yet confirmed (moved or edited) by the user.
     val isAuto: Boolean = false
+)
+
+data class Ammo(
+    val id: Long,
+    val name: String,
+    val caliber: String,
+    val notes: String = ""
 )
 
 data class Weapon(
@@ -267,7 +286,7 @@ fun TirTrackerApp() {
     val groupCircleDash = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f) }
     val autoImpactDash = remember { PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f) }
 
-    var currentTab by remember { mutableStateOf(AppTab.SHOOTING_RANGE) }
+    var currentTab by remember { mutableStateOf(AppTab.HOME) }
     var shootingStep by remember { mutableStateOf(ShootingStep.SESSION) }
 
     var targetTypeInput by remember { mutableStateOf("C50 (25m/50m)") }
@@ -306,8 +325,14 @@ fun TirTrackerApp() {
     var showAddWeaponDialog by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
 
+    val ammoList = remember { mutableStateListOf<Ammo>() }
+    var showAmmoPicker by remember { mutableStateOf(false) }
+    var showAddAmmoDialog by remember { mutableStateOf(false) }
+    var showNewSessionConfirm by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
         weaponsList.addAll(0, LocalJsonStore.loadWeapons(context))
+        ammoList.addAll(0, LocalJsonStore.loadAmmo(context))
     }
 
     // 4. Canvas interaction state
@@ -377,9 +402,6 @@ fun TirTrackerApp() {
     var historyDistanceFilter by remember { mutableStateOf("Toutes") }
     var historyWeaponFilter by remember { mutableStateOf("Toutes") }
 
-    var showChartDialog by remember { mutableStateOf(false) }
-    var chartWeaponFilter by remember { mutableStateOf("Toutes") }
-    var chartDisplayType by remember { mutableStateOf(ChartDisplayType.LINE) }
 
     // The in-memory list is the source of truth; the file is read once and written in the background.
     var historyLoaded by remember { mutableStateOf(false) }
@@ -718,6 +740,20 @@ fun TirTrackerApp() {
         }
     }
 
+    // A blank session, keeping the weapon and ammunition settings of the previous one.
+    fun startNewSession() {
+        editingSessionId = null
+        impactsList.clear()
+        selectedImageUri = null
+        resetPhotoAnalysis()
+        goToStep(ShootingStep.SESSION)
+        sessionTitleInput = "Séance de tir"
+        notesInput = ""
+    }
+
+    // Something worth keeping is on the shooting screen.
+    val sessionInProgress = editingSessionId != null || impactsList.isNotEmpty() || selectedImageUri != null
+
     // Save or Update Session in JSON
     fun saveSession() {
         if (impactsList.isEmpty()) {
@@ -777,103 +813,19 @@ fun TirTrackerApp() {
             }
 
             saveHistory(currentList)
+            // The saved session is now in the history: show it there, and start the next one blank.
+            startNewSession()
+            historySearchQuery = ""
+            historyDistanceFilter = "Toutes"
+            currentTab = AppTab.HISTORY
         } catch (e: Exception) {
             Toast.makeText(context, "Erreur : ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // DIALOG: Graphique d'évolution MOA
-    if (showChartDialog) {
-        val historyList = remember(savedSessionsList) { savedSessionsList }
-        val chartDataList = remember(historyList) {
-            historyList.map { obj ->
-                SessionChartData(
-                    id = obj.optLong("id", 0L),
-                    date = obj.optString("date", ""),
-                    weapon = obj.optString("weapon", "Arme"),
-                    caliber = obj.optString("caliber", ""),
-                    ammo = obj.optString("ammo", ""),
-                    distanceMeters = obj.optDouble("distanceMeters", 25.0).toFloat(),
-                    moa = obj.optDouble("moa", 0.0).toFloat(),
-                    esMm = obj.optDouble("esMm", 0.0).toFloat(),
-                    shotsCount = obj.optInt("shotsCount", 0)
-                )
-            }
-        }
-
-        val availableWeapons = remember(chartDataList) {
-            listOf("Toutes") + chartDataList.map { it.weapon }.distinct()
-        }
-
-        AlertDialog(
-            onDismissRequest = { showChartDialog = false },
-            containerColor = MaterialTheme.colorScheme.surface,
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.AutoGraph, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Évolution de la précision (MOA)", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                    }
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Type de vue :", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FilterChip(
-                                selected = chartDisplayType == ChartDisplayType.LINE,
-                                onClick = { chartDisplayType = ChartDisplayType.LINE },
-                                label = { Text("Courbe", fontSize = 12.sp) },
-                                leadingIcon = { Icon(imageVector = Icons.Default.ShowChart, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                            )
-                            FilterChip(
-                                selected = chartDisplayType == ChartDisplayType.HISTOGRAM,
-                                onClick = { chartDisplayType = ChartDisplayType.HISTOGRAM },
-                                label = { Text("Histogramme", fontSize = 12.sp) },
-                                leadingIcon = { Icon(imageVector = Icons.Default.BarChart, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                            )
-                        }
-                    }
-
-                    Text("Filtrer par arme :", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(availableWeapons) { w ->
-                            FilterChip(
-                                selected = chartWeaponFilter == w,
-                                onClick = { chartWeaponFilter = w },
-                                label = { Text(w, fontSize = 12.sp) }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    MoaProgressionChart(
-                        sessions = chartDataList,
-                        selectedWeapon = chartWeaponFilter,
-                        chartType = chartDisplayType
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = { showChartDialog = false }) {
-                    Text("Fermer")
-                }
-            }
-        )
+    // Back goes home from any section.
+    BackHandler(enabled = currentTab != AppTab.HOME) {
+        currentTab = AppTab.HOME
     }
 
     // MAIN SCAFFOLD WITH BOTTOM NAVIGATION
@@ -894,42 +846,15 @@ fun TirTrackerApp() {
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onSurface
-                ),
-                actions = {
-                    IconButton(onClick = { showChartDialog = true }) {
-                        Icon(imageVector = Icons.Default.AutoGraph, contentDescription = "Graphique MOA", tint = MaterialTheme.colorScheme.secondary)
-                    }
-                    IconButton(onClick = { showWeaponsDialog = true }) {
-                        Icon(imageVector = Icons.Default.Shield, contentDescription = "Coffre d'armes", tint = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
+                )
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                NavigationBarItem(
-                    selected = currentTab == AppTab.SHOOTING_RANGE,
-                    onClick = { currentTab = AppTab.SHOOTING_RANGE },
-                    icon = { Icon(imageVector = Icons.Default.AdsClick, contentDescription = "Pas de tir") },
-                    label = { Text("Pas de tir") }
-                )
-                NavigationBarItem(
-                    selected = currentTab == AppTab.HISTORY,
-                    onClick = { currentTab = AppTab.HISTORY },
-                    icon = {
-                        BadgedBox(
-                            badge = {
-                                if (savedSessionsList.isNotEmpty()) {
-                                    Badge { Text("${savedSessionsList.size}") }
-                                }
-                            }
-                        ) {
-                            Icon(imageVector = Icons.Default.History, contentDescription = "Historique")
-                        }
-                    },
-                    label = { Text("Historique") }
-                )
-            }
+            AppBottomBar(
+                current = currentTab.ordinal,
+                onSelect = { currentTab = AppTab.entries[it] },
+                historyBadge = savedSessionsList.size
+            )
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
@@ -968,12 +893,7 @@ fun TirTrackerApp() {
                                 }
                                 TextButton(
                                     onClick = {
-                                        editingSessionId = null
-                                        impactsList.clear()
-                                        selectedImageUri = null
-                                        resetPhotoAnalysis()
-                                        goToStep(ShootingStep.SESSION)
-                                        sessionTitleInput = "Séance de tir"
+                                        startNewSession()
                                         Toast.makeText(context, "Nouvelle séance vierge réinitialisée.", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.heightIn(min = 48.dp)
@@ -1000,14 +920,27 @@ fun TirTrackerApp() {
                     ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             Text("Votre séance", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                            OutlinedButton(
-                                onClick = { showWeaponsDialog = true },
-                                modifier = Modifier.fillMaxWidth().height(52.dp),
-                                shape = RoundedCornerShape(14.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.secondary)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Choisir dans mes armes (${weaponsList.size})", fontSize = 15.sp, color = MaterialTheme.colorScheme.secondary)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = { showWeaponsDialog = true },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.secondary)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Mes armes", fontSize = 15.sp, color = MaterialTheme.colorScheme.secondary, maxLines = 1)
+                                }
+                                OutlinedButton(
+                                    onClick = { showAmmoPicker = true },
+                                    modifier = Modifier.weight(1f).height(52.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.secondary)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Mes munitions", fontSize = 15.sp, color = MaterialTheme.colorScheme.secondary, maxLines = 1)
+                                }
                             }
                                 // Titre de séance
                                 OutlinedTextField(
@@ -2098,8 +2031,75 @@ fun TirTrackerApp() {
                 }
             }
 
+            AppTab.HOME -> {
+                val last = savedSessionsList.firstOrNull()
+                HomeScreen(
+                    summary = HomeSummary(
+                        sessionsCount = savedSessionsList.size,
+                        lastTitle = last?.optString("title", "Séance"),
+                        lastDate = last?.optString("date", ""),
+                        lastScore = last?.optInt("totalScore", 0),
+                        lastMoa = last?.optDouble("moa", 0.0)?.takeIf { it > 0.0 },
+                        bestMoa = savedSessionsList.map { it.optDouble("moa", 0.0) }.filter { it > 0.0 }.minOrNull()
+                    ),
+                    weaponsCount = weaponsList.size,
+                    ammoCount = ammoList.size,
+                    sessionInProgress = if (!sessionInProgress) null else listOf(
+                        if (editingSessionId != null) "Correction : $sessionTitleInput" else sessionTitleInput,
+                        "étape ${shootingStep.ordinal + 1}/3",
+                        if (impactsList.isEmpty()) "" else "${impactsList.size} coup${if (impactsList.size > 1) "s" else ""}"
+                    ).filter { it.isNotBlank() }.joinToString(" · "),
+                    onResume = { currentTab = AppTab.SHOOTING_RANGE },
+                    onNewSession = {
+                        if (sessionInProgress) {
+                            showNewSessionConfirm = true
+                        } else {
+                            startNewSession()
+                            currentTab = AppTab.SHOOTING_RANGE
+                        }
+                    },
+                    onHistory = { currentTab = AppTab.HISTORY },
+                    onArmory = { currentTab = AppTab.ARMORY },
+                    onAnalysis = { currentTab = AppTab.ANALYSIS },
+                    modifier = Modifier.padding(innerPadding)
+                )
+            }
+
             AppTab.ARMORY -> {
-                // Coffre d'armes (Accessible via navigation)
+                ArmoryScreen(
+                    weapons = weaponsList,
+                    ammo = ammoList,
+                    onAddWeapon = { showAddWeaponDialog = true },
+                    onDeleteWeapon = {
+                        weaponsList.remove(it)
+                        LocalJsonStore.saveWeapons(context, weaponsList.toList())
+                    },
+                    onAddAmmo = { showAddAmmoDialog = true },
+                    onDeleteAmmo = {
+                        ammoList.remove(it)
+                        LocalJsonStore.saveAmmo(context, ammoList.toList())
+                    },
+                    modifier = Modifier.padding(innerPadding)
+                )
+            }
+
+            AppTab.ANALYSIS -> {
+                val chartDataList = remember(savedSessionsList) {
+                    savedSessionsList.map { obj ->
+                        SessionChartData(
+                            id = obj.optLong("id", 0L),
+                            date = obj.optString("date", ""),
+                            weapon = obj.optString("weapon", "Arme"),
+                            caliber = obj.optString("caliber", ""),
+                            ammo = obj.optString("ammo", ""),
+                            distanceMeters = obj.optDouble("distanceMeters", 25.0).toFloat(),
+                            moa = obj.optDouble("moa", 0.0).toFloat(),
+                            esMm = obj.optDouble("esMm", 0.0).toFloat(),
+                            shotsCount = obj.optInt("shotsCount", 0)
+                        )
+                    }
+                }
+                AnalysisScreen(sessions = chartDataList, modifier = Modifier.padding(innerPadding))
             }
         }
     }
@@ -2123,109 +2123,115 @@ fun TirTrackerApp() {
         )
     }
 
-    // DIALOG: Armory Dialog
+    // DIALOG: choose a weapon of the rack for the session
     if (showWeaponsDialog) {
-        AlertDialog(
-            onDismissRequest = { showWeaponsDialog = false },
-            containerColor = MaterialTheme.colorScheme.surface,
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Bibliothèque d'armes", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    }
-                    IconButton(onClick = { showAddWeaponDialog = true }) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "Ajouter arme", tint = MaterialTheme.colorScheme.secondary)
-                    }
-                }
+        LibraryPickerDialog(
+            title = "Mes armes",
+            emptyText = "Aucune arme dans le râtelier.",
+            items = weaponsList.map { w -> Triple<Any, String, List<String>>(w, w.name, listOf(w.type, w.caliber)) },
+            onPick = { picked ->
+                val w = picked as Weapon
+                weaponNameInput = w.name
+                weaponCaliberInput = w.caliber
+                showWeaponsDialog = false
             },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth().height(360.dp)) {
-                    Text(
-                        text = "Sélectionnez une arme pour pré-remplir la séance ou gérez votre coffre :",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    if (weaponsList.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Aucune arme enregistrée.", color = MaterialTheme.colorScheme.outline)
-                        }
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(weaponsList) { weapon ->
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            weaponNameInput = weapon.name
-                                            weaponCaliberInput = weapon.caliber
-                                            showWeaponsDialog = false
-                                            Toast.makeText(context, "Arme sélectionnée : ${weapon.name}", Toast.LENGTH_SHORT).show()
-                                        },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(weapon.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                                            Spacer(modifier = Modifier.height(2.dp))
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = MaterialTheme.colorScheme.primaryContainer
-                                                ) {
-                                                    Text(
-                                                        weapon.type,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    )
-                                                }
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = MaterialTheme.colorScheme.surface
-                                                ) {
-                                                    Text(
-                                                        weapon.caliber,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.secondary,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
+            onAdd = { showAddWeaponDialog = true },
+            onDismiss = { showWeaponsDialog = false }
+        )
+    }
 
-                                        IconButton(
-                                            onClick = {
-                                                weaponsList.remove(weapon)
-                                                LocalJsonStore.saveWeapons(context, weaponsList.toList())
-                                            }
-                                        ) {
-                                            Icon(imageVector = Icons.Default.Delete, contentDescription = "Supprimer", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
-                                        }
-                                    }
-                                }
-                            }
+    // DIALOG: choose ammunition of the rack, those of the session's caliber first
+    if (showAmmoPicker) {
+        val sorted = ammoList.sortedByDescending { it.caliber.isNotBlank() && it.caliber.equals(weaponCaliberInput.trim(), ignoreCase = true) }
+        LibraryPickerDialog(
+            title = "Mes munitions",
+            emptyText = "Aucune munition dans le râtelier.",
+            items = sorted.map { a -> Triple<Any, String, List<String>>(a, a.name, listOf(a.caliber)) },
+            onPick = { picked ->
+                val a = picked as Ammo
+                ammoInput = a.name
+                if (weaponCaliberInput.isBlank()) weaponCaliberInput = a.caliber
+                showAmmoPicker = false
+            },
+            onAdd = { showAddAmmoDialog = true },
+            onDismiss = { showAmmoPicker = false }
+        )
+    }
+
+    // DIALOG: Ajouter une munition
+    if (showAddAmmoDialog) {
+        var newName by remember { mutableStateOf("") }
+        var newCaliber by remember { mutableStateOf(weaponCaliberInput) }
+        var newNotes by remember { mutableStateOf("") }
+        val caliberSuggestions = listOf(".22 LR", "9x19 mm", "4.5 mm", ".308 Win", "5.56x45 mm / .223 Rem", ".38 Special")
+        AlertDialog(
+            onDismissRequest = { showAddAmmoDialog = false },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            title = { Text("Ajouter une munition", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Marque / modèle (ex : SK Rifle Match 40gr)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("ammo_name_field")
+                    )
+                    OutlinedTextField(
+                        value = newCaliber,
+                        onValueChange = { newCaliber = it },
+                        label = { Text("Calibre") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(caliberSuggestions) { cal ->
+                            FilterChip(selected = newCaliber == cal, onClick = { newCaliber = cal }, label = { Text(cal, fontSize = 12.sp) })
                         }
                     }
+                    OutlinedTextField(
+                        value = newNotes,
+                        onValueChange = { newNotes = it },
+                        label = { Text("Notes (facultatif)") },
+                        placeholder = { Text("Ex : subsonique, lot n°…") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             },
             confirmButton = {
-                Button(onClick = { showWeaponsDialog = false }) {
-                    Text("Fermer")
-                }
+                Button(onClick = {
+                    if (newName.isNotBlank()) {
+                        ammoList.add(Ammo(System.currentTimeMillis(), newName.trim(), newCaliber.trim(), newNotes.trim()))
+                        LocalJsonStore.saveAmmo(context, ammoList.toList())
+                        showAddAmmoDialog = false
+                    } else {
+                        Toast.makeText(context, "Veuillez entrer un nom de munition.", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Ajouter") }
+            },
+            dismissButton = { TextButton(onClick = { showAddAmmoDialog = false }) { Text("Annuler") } }
+        )
+    }
+
+    // DIALOG: abandon the session in progress for a new one
+    if (showNewSessionConfirm) {
+        AlertDialog(
+            onDismissRequest = { showNewSessionConfirm = false },
+            title = { Text("Séance en cours", fontWeight = FontWeight.Bold) },
+            text = { Text("Une séance n'est pas enregistrée. La reprendre, ou l'abandonner pour en commencer une nouvelle ?") },
+            confirmButton = {
+                Button(onClick = {
+                    showNewSessionConfirm = false
+                    currentTab = AppTab.SHOOTING_RANGE
+                }) { Text("Reprendre") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showNewSessionConfirm = false
+                    startNewSession()
+                    currentTab = AppTab.SHOOTING_RANGE
+                }) { Text("Nouvelle séance", color = MaterialTheme.colorScheme.error) }
             }
         )
     }
@@ -2244,7 +2250,7 @@ fun TirTrackerApp() {
         AlertDialog(
             onDismissRequest = { showAddWeaponDialog = false },
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            title = { Text("Ajouter une arme au coffre", fontWeight = FontWeight.Bold) },
+            title = { Text("Ajouter une arme", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -2328,8 +2334,7 @@ fun TirTrackerApp() {
                             weaponsList.add(newWeapon)
                             LocalJsonStore.saveWeapons(context, weaponsList.toList())
                             showAddWeaponDialog = false
-                            Toast.makeText(context, "Arme ajoutée au coffre !", Toast.LENGTH_SHORT).show()
-                        } else {
+                                                    } else {
                             Toast.makeText(context, "Veuillez entrer un nom d'arme.", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -2604,4 +2609,40 @@ private fun ShotTable(shots: List<ScreenImpact>, onSelect: (ScreenImpact) -> Uni
             }
         }
     }
+}
+
+/** Picks an item of the rack (weapon or ammunition) to fill the session form. */
+@Composable
+private fun LibraryPickerDialog(
+    title: String,
+    emptyText: String,
+    items: List<Triple<Any, String, List<String>>>,
+    onPick: (Any) -> Unit,
+    onAdd: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        title = { Text(title, fontWeight = FontWeight.Bold) },
+        text = {
+            if (items.isEmpty()) {
+                Text(emptyText, color = MaterialTheme.colorScheme.outline)
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 380.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(items) { (item, name, tags) ->
+                        ArmoryRow(title = name, tags = tags, detail = "", onDelete = null, onClick = { onPick(item) })
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } },
+        dismissButton = {
+            TextButton(onClick = onAdd) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Ajouter")
+            }
+        }
+    )
 }
