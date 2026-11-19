@@ -34,7 +34,7 @@ Typographie (`ui/theme/Type.kt`) : `bodyMedium` 14 sp, `bodySmall` 13 sp, `label
 | Canevas | Halo blanc qui pulse autour du dernier impact | En continu | `latestPulse` (transition infinie) |
 | Télémétrie | MOA, ES, H, L, H+L glissent vers la nouvelle valeur | Déplacement d'un impact | `AnimatedNumber` (450 ms) |
 | Boutons | Léger rétrécissement (97 %) pendant l'appui | Appui | `Modifier.pressScale` |
-| Onglets | Fondu entre « Pas de tir » et « Historique » | Changement d'onglet | `Crossfade` |
+| Onglets | Fondu et glissement entre « Pas de tir » et « Historique » | Changement d'onglet | `AnimatedContent` |
 | Bandeau d'ajustement | Apparition et disparition en fondu et glissement | Ouverture d'une séance | `AnimatedVisibility` |
 | Liste d'historique | Les cartes se replacent au lieu de sauter | Filtre, recherche | `Modifier.animateItem()` |
 | Barre d'annulation | Message « Annuler » 4 s après une suppression | Suppression d'un coup | `SnackbarHost` |
@@ -61,3 +61,15 @@ Règle : pas d'animation qui bloque la saisie. Le pointage reste réactif pendan
 - Le découpage de `MainActivity.kt` (2 600 lignes) en écrans séparés : à faire avant d'ajouter des fonctions.
 - Les textes en dur (206 chaînes françaises) : à migrer vers `strings.xml`.
 - Les barèmes (C200, IPSC, 10 m) : à valider avec la fédération avant de changer le code.
+
+## 7. Thèmes
+
+Trois thèmes, choisis depuis le bouton palette de la barre du haut et gardés d'un lancement à l'autre (`ui/theme/Theme.kt`) :
+
+| Thème | Fond | Accent | Usage |
+|---|---|---|---|
+| Sombre | ardoise `#0F141C` | rouge `#FF4D4D`, or `#FBBF24` | par défaut, tir de nuit |
+| Clair | blanc cassé `#F8FAFC` | rouge `#B91C1C`, ocre `#92400E` | plein jour, texte foncé |
+| Tactique | noir `#080A09`, cartes vert foncé désaturé `#111714` | or `#D6B25E`, vert sauge `#9CB38F` | usage terrain |
+
+Les couleurs de score (mouche, 10, autres, flyer) sont identiques dans les trois thèmes. Les textes secondaires gardent un contraste d'au moins 4,5:1 sur leur fond. Le thème clair et le thème tactique n'ont pas été vérifiés à l'écran (voir section 5).

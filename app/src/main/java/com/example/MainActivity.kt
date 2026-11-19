@@ -10,6 +10,21 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material.icons.filled.Palette
+import com.example.ui.components.pressScale
+import com.example.ui.theme.AppThemeMode
+import com.example.ui.theme.ThemePreferences
+import com.example.ui.theme.Typography
+import com.example.ui.theme.schemeFor
 import androidx.compose.animation.core.Animatable
 
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -140,7 +155,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -185,23 +202,6 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.hypot
 
-// Tactical Dark Theme
-private val TacticalDarkColorScheme = darkColorScheme(
-    primary = Color(0xFFFF4D4D),           // Safety Red
-    onPrimary = Color(0xFF380004),
-    primaryContainer = Color(0xFF68000C),
-    onPrimaryContainer = Color(0xFFFFDAD6),
-    secondary = Color(0xFFFBBF24),         // Tactical Gold
-    onSecondary = Color(0xFF261900),
-    background = Color(0xFF0F141C),        // Charcoal Black
-    surface = Color(0xFF161E29),           // Anthracite Card
-    surfaceVariant = Color(0xFF212B3B),    // Elevated Panel
-    onSurface = Color(0xFFF1F5F9),
-    onSurfaceVariant = Color(0xFF94A3B8),
-    outline = Color(0xFF7C8AA0),
-    outlineVariant = Color(0xFF334155)
-)
-
 enum class AnnotationMode {
     CALIBRATE,
     TARGET_CENTER,
@@ -245,8 +245,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(colorScheme = TacticalDarkColorScheme) {
-                ShootRApp()
+            // Le thème choisi est gardé d'un lancement à l'autre.
+            var themeMode by remember { mutableStateOf(ThemePreferences.load(this@MainActivity)) }
+            MaterialTheme(colorScheme = schemeFor(themeMode), typography = Typography) {
+                ShootRApp(
+                    themeMode = themeMode,
+                    onThemeModeChange = { mode ->
+                        themeMode = mode
+                        ThemePreferences.save(this@MainActivity, mode)
+                    }
+                )
             }
         }
     }
@@ -254,13 +262,18 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun ShootRApp() {
+fun ShootRApp(
+    themeMode: AppThemeMode = AppThemeMode.DARK,
+    onThemeModeChange: (AppThemeMode) -> Unit = {}
+) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     // One cached layout per impact number: the default cache (8 entries) thrashes on every frame
     // as soon as more impacts than that are drawn.
     val textMeasurer = rememberTextMeasurer(cacheSize = 64)
     val impactNumberStyle = remember { TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Black) }
+    // Score écrit sous chaque cercle : la lecture ne dépend pas de la seule couleur.
+    val scoreLabelStyle = remember { TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
     val calibrationLabelStyle = remember { TextStyle(color = Color(0xFFFBBF24), fontSize = 12.sp, fontWeight = FontWeight.Bold) }
     val calibrationRingDash = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 6f), 0f) }
     val calibrationRadiusDash = remember { PathEffect.dashPathEffect(floatArrayOf(6f, 4f), 0f) }
@@ -346,6 +359,16 @@ fun ShootRApp() {
         }
         knownImpactCount = impactsList.size
     }
+
+    // Halo blanc qui pulse autour du dernier impact posé (en continu, tant qu'il est le dernier).
+    val haloTransition = rememberInfiniteTransition(label = "latestHalo")
+    val haloPulse by haloTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Reverse),
+        label = "haloPulse"
+    )
+    var showThemeDialog by remember { mutableStateOf(false) }
 
     // 5. Shot Score Adjustment (Ajustement des points a posteriori)
     var impactUnderEdit by remember { mutableStateOf<ScreenImpact?>(null) }
@@ -1203,6 +1226,54 @@ fun ShootRApp() {
         )
     }
 
+    // DIALOG: choix du thème (sombre, clair, tactique), gardé entre deux lancements
+    if (showThemeDialog) {
+        AlertDialog(
+            onDismissRequest = { showThemeDialog = false },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            title = { Text("Thème de l'app", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AppThemeMode.entries.forEach { mode ->
+                        val selected = mode == themeMode
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onThemeModeChange(mode)
+                                    showThemeDialog = false
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(mode.label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        mode.description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (selected) {
+                                    Icon(imageVector = Icons.Default.Check, contentDescription = "Thème actuel", tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showThemeDialog = false }) {
+                    Text("Fermer")
+                }
+            }
+        )
+    }
+
     // MAIN SCAFFOLD WITH BOTTOM NAVIGATION
     Scaffold(
         topBar = {
@@ -1223,6 +1294,9 @@ fun ShootRApp() {
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 actions = {
+                    IconButton(onClick = { showThemeDialog = true }) {
+                        Icon(imageVector = Icons.Default.Palette, contentDescription = "Changer de thème", tint = MaterialTheme.colorScheme.onSurface)
+                    }
                     IconButton(onClick = { showChartDialog = true }) {
                         Icon(imageVector = Icons.Default.AutoGraph, contentDescription = "Graphique MOA", tint = MaterialTheme.colorScheme.secondary)
                     }
@@ -1281,7 +1355,11 @@ fun ShootRApp() {
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         // Editing Mode Banner
-                        if (editingSessionId != null) {
+                        AnimatedVisibility(
+                            visible = editingSessionId != null,
+                            enter = fadeIn() + expandVertically(),
+                            exit = fadeOut() + shrinkVertically()
+                        ) {
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
                                 color = MaterialTheme.colorScheme.secondaryContainer,
@@ -2004,6 +2082,15 @@ fun ShootRApp() {
                                         }
                                         drawCircle(color = impactColor, radius = radius, center = pos)
                                         drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = if (isBeingDragged) 2.8f else if (isLatest) 3.5f else 2f))
+                                        if (isLatest && !isBeingDragged) {
+                                            // Halo blanc qui pulse : signale le dernier coup posé.
+                                            drawCircle(
+                                                color = Color.White.copy(alpha = 0.6f * (1f - haloPulse)),
+                                                radius = radius + 6f + 8f * haloPulse,
+                                                center = pos,
+                                                style = Stroke(width = 2.5f)
+                                            )
+                                        }
                                         if (isLatest && latestPulse.value < 1f) {
                                             // Micro-animation: a ring expands from the impact that was just placed.
                                             val p = latestPulse.value
@@ -2026,6 +2113,27 @@ fun ShootRApp() {
                                         drawText(
                                             textLayoutResult = numLayout,
                                             topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
+                                        )
+
+                                        // Score écrit sous le cercle, sur une petite pastille sombre.
+                                        val scoreText = when {
+                                            imp.isFlyer -> "F"
+                                            imp.isInnerTen -> "10X"
+                                            else -> imp.score.toString()
+                                        }
+                                        val scoreLayout = textMeasurer.measure(scoreText, style = scoreLabelStyle)
+                                        val labelWidth = scoreLayout.size.width + 8f
+                                        val labelHeight = scoreLayout.size.height + 2f
+                                        val labelTop = pos.y + radius + 4f
+                                        drawRoundRect(
+                                            color = Color(0xDD0F141C),
+                                            topLeft = Offset(pos.x - labelWidth / 2f, labelTop),
+                                            size = Size(labelWidth, labelHeight),
+                                            cornerRadius = CornerRadius(6f)
+                                        )
+                                        drawText(
+                                            textLayoutResult = scoreLayout,
+                                            topLeft = Offset(pos.x - scoreLayout.size.width / 2f, labelTop + 1f)
                                         )
                                     }
 
@@ -2331,10 +2439,12 @@ fun ShootRApp() {
                         }
 
                         // 7. BOUTON ENREGISTRER LA SÉANCE
+                        val saveInteraction = remember { MutableInteractionSource() }
                         Button(
                             onClick = { saveSession() },
                             enabled = historyLoaded,
-                            modifier = Modifier.fillMaxWidth().height(52.dp).testTag("save_session_button"),
+                            interactionSource = saveInteraction,
+                            modifier = Modifier.fillMaxWidth().height(52.dp).pressScale(saveInteraction).testTag("save_session_button"),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
@@ -2457,10 +2567,11 @@ fun ShootRApp() {
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(filteredSessions) { s ->
+                                items(filteredSessions, key = { it.optLong("id") }) { s ->
                                     Card(
                                         modifier = Modifier
                                             .fillMaxWidth()
+                                            .animateItem()
                                             .clickable { loadSessionForRetroactiveAdjustment(s) },
                                         shape = RoundedCornerShape(14.dp),
                                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
