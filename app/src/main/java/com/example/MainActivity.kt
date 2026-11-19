@@ -325,6 +325,10 @@ fun ShootRApp(
     // 4. Canvas interaction state
     // Le parcours commence par le calibrage : la photo et le visuel d'abord, les impacts ensuite.
     var activeMode by remember { mutableStateOf(AnnotationMode.CALIBRATE) }
+    // Sans photo, le calibrage n'est pas proposé (son panneau est masqué) : le mode reste « Impact ».
+    LaunchedEffect(selectedImageUri == null) {
+        if (selectedImageUri == null) activeMode = AnnotationMode.IMPACT
+    }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var canvasWidthPx by remember { mutableFloatStateOf(1000f) }
@@ -606,6 +610,8 @@ fun ShootRApp(
     ) { uri: Uri? ->
         if (uri != null) {
             selectedImageUri = uri
+            // Une photo est chargée : le calibrage devient possible et démarre.
+            activeMode = AnnotationMode.CALIBRATE
             resetPhotoAnalysis()
             analyzeSelectedPhoto()
         }
@@ -1565,26 +1571,6 @@ fun ShootRApp(
                                         Text("Scanner cible", fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
                                     }
 
-                                    Spacer(modifier = Modifier.width(6.dp))
-
-                                    OutlinedButton(
-                                        onClick = { detectImpactsOnPhoto() },
-                                        enabled = !isDetectingImpacts,
-                                        modifier = Modifier.height(44.dp).testTag("detect_impacts_button"),
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        if (isDetectingImpacts) {
-                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                        } else {
-                                            Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                                        }
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = if (isDetectingImpacts) "Détection…" else "Détecter impacts",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
                                 }
                             }
 
@@ -1608,7 +1594,9 @@ fun ShootRApp(
                             }
                         }
 
-                        // 2. MODES DE POINTAGE
+                        // Étape 3 : le calibrage ne s'affiche qu'une fois une photo chargée.
+                        if (selectedImageUri != null) {
+                        // 3 · Calibrage : modes de pointage
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(14.dp),
@@ -1676,6 +1664,27 @@ fun ShootRApp(
                                     Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
                                 }
                             )
+                        }
+                        } else {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(
+                                        text = "3 · Calibrage en attente",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "Chargez d'abord une photo de cible à l'étape 2 : le calibrage se fait sur le visuel de la photo.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
 
                         // 4. CANEVAS AVEC PHOTO ET OVERLAYS
@@ -2263,6 +2272,28 @@ fun ShootRApp(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
+                                // Étape 4 : lecture des impacts, détection automatique sur la photo
+                                if (selectedImageUri != null) {
+                                    OutlinedButton(
+                                        onClick = { detectImpactsOnPhoto() },
+                                        enabled = !isDetectingImpacts,
+                                        modifier = Modifier.fillMaxWidth().height(44.dp).testTag("detect_impacts_button"),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        if (isDetectingImpacts) {
+                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isDetectingImpacts) "Détection…" else "Détecter impacts",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                }
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
