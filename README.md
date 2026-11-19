@@ -1,8 +1,10 @@
-# Tir Tracker (ShootR)
+# ShootR
 
 Application Android native pour tireurs sportifs : pointage des impacts sur la photo d'une cible, calcul du groupement et suivi des séances dans le temps.
 
 L'interface est en français. Toutes les données restent sur l'appareil ; l'application ne fait aucun appel réseau.
+
+Un audit du code, avec les points à valider avant de s'y fier pour un usage en compétition, est dans [docs/AUDIT.md](docs/AUDIT.md).
 
 ## Fonctionnalités
 
@@ -14,7 +16,7 @@ L'interface est en français. Toutes les données restent sur l'appareil ; l'app
   - La taille d'un impact isolé est mesurée sur la photo elle-même, ce qui permet de séparer les impacts qui se chevauchent.
   - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés. Un impact qui touche un chiffre est conservé : un chiffre n'a que des traits fins, un impact a un cœur plein.
   - Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter impacts » relance la recherche sans dupliquer ceux déjà placés.
-- **Score automatique** selon le type de cible (C50, pistolet 10 m, carabine 10 m, C200), avec mouches (10X).
+- **Score automatique** sur la cible C50, avec mouches (10X). Les flyers comptent dans le total des points mais sont exclus du groupement. Pour les autres cibles (C200, IPSC, Hunter, carabine et pistolet 10 m), il n'y a pas de points : le groupement, le MOA et le point moyen restent disponibles, en attendant des barèmes sourcés.
 - **Ajustement a posteriori** : pour chaque coup, correction des points, cordon ±1, recalage au millimètre, exclusion des « flyers », suppression.
 - **Télémétrie du groupement** : écart extrême (ES), hauteur, largeur, H+L, MOA et dérive du point moyen d'impact.
 - **Historique** : recherche, filtre par distance, réouverture d'une séance pour la corriger.
@@ -35,8 +37,6 @@ Le repérage et la détection reposent sur une analyse d'image locale, sans mod�
 # Indiquer l'emplacement du SDK (ou créer local.properties avec sdk.dir=...)
 export ANDROID_HOME=/chemin/vers/android-sdk
 
-# Le plugin de secrets lit un fichier .env ; un fichier vide suffit
-touch .env
 
 ./gradlew assembleDebug     # app/build/outputs/apk/debug/app-debug.apk
 ./gradlew assembleRelease   # app/build/outputs/apk/release/app-release.apk
@@ -97,18 +97,20 @@ app/src/main/java/com/example/
     └── MoaProgressionChart.kt
 ```
 
-Le dépôt contient aussi une couche Room (`data/dao`, `data/model`, `TirTrackerDatabase`, `TirTrackerRepository`), un `TirTrackerViewModel`, les écrans de `ui/screens`, `TargetCanvas`, `InteractiveTargetView` et `ui/theme`. Ce code compile mais n'est appelé nulle part pour l'instant : l'application passe entièrement par `MainActivity` et les fichiers JSON.
 
-Technologies : Kotlin, Jetpack Compose (Material 3), Coil pour l'affichage des photos, coroutines.
+Technologies : Kotlin, Jetpack Compose (Material 3), Coil pour l'affichage des photos, coroutines. Pas de base de données : l'historique est un fichier JSON.
 
 ## Données
 
 Les données sont stockées dans le répertoire privé de l'application :
 
 - `sessions_history.json` : séances enregistrées, avec leurs impacts et statistiques ;
-- `weapons_library.json` : bibliothèque d'armes.
+- `weapons_library.json` : bibliothèque d'armes ;
+- `session_photos/` : une copie de la photo de chaque séance, rangée dans le stockage privé de l'application.
 
-Au premier lancement, quelques séances et armes d'exemple sont créées. Désinstaller l'application supprime ces fichiers.
+Au premier lancement, quelques séances et armes d'exemple sont créées. Désinstaller l'application supprime ces fichiers et les photos.
+
+Ces données ne sont pas incluses dans la sauvegarde Google ni dans le transfert vers un autre appareil.
 
 ## Limites connues
 
@@ -118,6 +120,7 @@ Au premier lancement, quelques séances et armes d'exemple sont créées. Désin
   - les trous apparaissent noirs dans le noir (rien derrière la cible) ;
   - un objet brillant ou un reflet se trouve sur le visuel ;
   - la photo est prise de trop loin pour un petit calibre (comptez au moins 2 pixels par millimètre pour du .22).
-- La photo d'une séance n'est pas copiée dans l'application : après un redémarrage, une séance rouverte peut ne plus afficher son image. Les impacts et les statistiques sont conservés.
+- Les séances enregistrées avant cette version n'ont pas de copie de leur photo : si la photo venait de la galerie, elle peut ne plus s'afficher. Les impacts et les statistiques sont conservés.
+- Sans barème validé, les cibles autres que le C50 n'ont pas de points (voir « Score automatique »).
 - La séance en cours de saisie n'est pas sauvegardée tant qu'on n'a pas appuyé sur « Enregistrer ».
 - L'affichage est verrouillé en portrait.

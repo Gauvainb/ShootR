@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Tir Tracker"
+rootProject.name = "ShootR"
 
 include(":app")

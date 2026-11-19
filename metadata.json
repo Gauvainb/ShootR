@@ -1,8 +1,4 @@
 {
-  "name": "Tir Tracker",
-  "description": "Application native pour tireurs sportifs : carnet de tir, impacteur de cible interactif, suivi des armes, munitions et statistiques de groupement.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "name": "ShootR",
+  "description": "Application Android native pour tireurs sportifs : pointage des impacts sur photo de cible, groupement, suivi des séances et des armes. Données locales, sans réseau."
 }

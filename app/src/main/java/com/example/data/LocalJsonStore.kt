@@ -1,6 +1,7 @@
 package com.example.data
 
 import android.content.Context
+import android.net.Uri
 import com.example.Weapon
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,7 @@ import java.util.Locale
 object LocalJsonStore {
     private const val SESSIONS_FILE = "sessions_history.json"
     private const val WEAPONS_FILE = "weapons_library.json"
+    private const val PHOTOS_DIR = "session_photos"
 
     private val diskDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val writeScope = CoroutineScope(SupervisorJob() + diskDispatcher)
@@ -41,6 +43,8 @@ object LocalJsonStore {
                 }
                 sessions.sortedByDescending { it.optLong("id", 0L) }
             } catch (_: Exception) {
+                // Unreadable file: keep a copy before the next save replaces it with the new history.
+                keepUnreadableCopy(File(filesDir, SESSIONS_FILE))
                 emptyList()
             }
         }
@@ -57,6 +61,44 @@ object LocalJsonStore {
         }
     }
 
+
+    /** Folder of the session photos, inside the app's private storage. */
+    private fun photosDir(context: Context): File =
+        File(context.applicationContext.filesDir, PHOTOS_DIR)
+
+    /** True when [uri] already points to a photo kept in private storage. */
+    fun isPrivatePhoto(context: Context, uri: Uri): Boolean {
+        if (uri.scheme != "file") return false
+        val path = uri.path ?: return false
+        return try {
+            File(path).canonicalPath.startsWith(photosDir(context).canonicalPath + File.separator)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Copies a session photo into private storage and returns its file URI, or null when the source
+     * cannot be read. The copy is named after the session, so saving again replaces it.
+     */
+    suspend fun copyPhoto(context: Context, source: Uri, sessionId: Long): Uri? = withContext(diskDispatcher) {
+        try {
+            val dir = photosDir(context).apply { mkdirs() }
+            val target = File(dir, "session-$sessionId.jpg")
+            context.contentResolver.openInputStream(source)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: return@withContext null
+            Uri.fromFile(target)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Removes every session photo, e.g. when the history is cleared. */
+    suspend fun deletePhotos(context: Context) = withContext(diskDispatcher) {
+        photosDir(context).deleteRecursively()
+        Unit
+    }
     /** Weapons library. Seeds default weapons on first launch. */
     suspend fun loadWeapons(context: Context): List<Weapon> {
         val filesDir = context.applicationContext.filesDir
@@ -80,6 +122,7 @@ object LocalJsonStore {
                     defaultWeapons().also { writeAtomically(file, weaponsToJson(it)) }
                 }
             } catch (_: Exception) {
+                keepUnreadableCopy(File(filesDir, WEAPONS_FILE))
                 emptyList()
             }
         }
@@ -116,6 +159,18 @@ object LocalJsonStore {
             )
         }
         return array.toString()
+    }
+
+    /**
+     * Copies an unreadable store file to `<name>.corrupt-<timestamp>.json` so its content can be
+     * recovered by hand. Never throws: this runs while a read is already failing.
+     */
+    private fun keepUnreadableCopy(file: File) {
+        if (!file.exists()) return
+        runCatching {
+            val stamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date())
+            file.copyTo(File(file.parentFile, "${file.nameWithoutExtension}.corrupt-$stamp.json"))
+        }
     }
 
     /** Writes to a temp file then renames it, so a crash mid-write cannot corrupt the store. */
