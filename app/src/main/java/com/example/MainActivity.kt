@@ -323,7 +323,8 @@ fun ShootRApp(
     }
 
     // 4. Canvas interaction state
-    var activeMode by remember { mutableStateOf(AnnotationMode.IMPACT) }
+    // Le parcours commence par le calibrage : la photo et le visuel d'abord, les impacts ensuite.
+    var activeMode by remember { mutableStateOf(AnnotationMode.CALIBRATE) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var canvasWidthPx by remember { mutableFloatStateOf(1000f) }
@@ -1395,7 +1396,15 @@ fun ShootRApp(
                             }
                         }
 
-                        // 1. CARACTÉRISATION DE LA SÉANCE & TYPE DE CIBLE
+                        // Parcours : 1 arme, 2 cible, 3 calibrage, 4 lecture des impacts, 5 score
+                        ShootingStepper(
+                            weaponReady = weaponNameInput.isNotBlank(),
+                            targetReady = selectedImageUri != null,
+                            calibrated = pixelPerMm > 0f,
+                            impactsReady = impactsList.isNotEmpty()
+                        )
+
+                        // 1 · Arme et séance
                         Card(
                             modifier = Modifier.fillMaxWidth().testTag("session_characterization_card"),
                             shape = RoundedCornerShape(14.dp),
@@ -1408,7 +1417,7 @@ fun ShootRApp(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "Paramètres de la séance",
+                                        text = "1 · Arme et séance",
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.primary
@@ -1434,38 +1443,6 @@ fun ShootRApp(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(10.dp)
                                 )
-
-                                // Type de cible avec Reconnaissance Auto Badge
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Type de cible :", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    if (detectedTargetResult?.visualFound == true) {
-                                        Text(
-                                            text = "🎯 Visuel repéré",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.secondary
-                                        )
-                                    }
-                                }
-
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    items(targetTypeOptions) { target ->
-                                        FilterChip(
-                                            selected = targetTypeInput == target,
-                                            onClick = {
-                                                targetTypeInput = target
-                                                if (target.contains("10m")) distanceInput = "10"
-                                                else if (target.contains("200m")) distanceInput = "200"
-                                            },
-                                            label = { Text(target, fontSize = 12.sp) }
-                                        )
-                                    }
-                                }
-
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedTextField(
                                         value = weaponNameInput,
@@ -1509,76 +1486,49 @@ fun ShootRApp(
                             }
                         }
 
-                        // 2. MODES DE POINTAGE
+                        // 2 · Cible : type de cible puis photo
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().testTag("target_card"),
                             shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(6.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                FilterChip(
-                                    selected = activeMode == AnnotationMode.CALIBRATE,
-                                    onClick = {
-                                        activeMode = AnnotationMode.CALIBRATE
-                                        if (targetCenterPx == null) {
-                                            calibrationStep = CalibrationStep.SET_CENTER
-                                        } else if (calibrationEdgePx == null) {
-                                            calibrationStep = CalibrationStep.CLICK_EDGE
-                                        } else {
-                                            calibrationStep = CalibrationStep.CALIBRATED
-                                        }
-                                    },
-                                    label = { Text("Calibrer visuel", fontSize = 13.sp) },
-                                    leadingIcon = { Icon(imageVector = Icons.Default.Straighten, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp)) },
-                                    modifier = Modifier.weight(1.2f),
-                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFF59E0B).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFBBF24))
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "2 · Cible",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
-                                FilterChip(
-                                    selected = activeMode == AnnotationMode.TARGET_CENTER,
-                                    onClick = { activeMode = AnnotationMode.TARGET_CENTER },
-                                    label = { Text("Centre", fontSize = 13.sp) },
-                                    leadingIcon = { Icon(imageVector = Icons.Default.CenterFocusStrong, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp)) },
-                                    modifier = Modifier.weight(0.9f),
-                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF10B981).copy(alpha = 0.25f), selectedLabelColor = Color(0xFF34D399))
-                                )
-                                FilterChip(
-                                    selected = activeMode == AnnotationMode.IMPACT,
-                                    onClick = { activeMode = AnnotationMode.IMPACT },
-                                    label = { Text("Impact", fontSize = 13.sp) },
-                                    leadingIcon = { Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp)) },
-                                    modifier = Modifier.weight(0.9f),
-                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFEF4444).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFF6B6B))
-                                )
-                            }
-                        }
-
-                        // Panneau d'assistance guidé à la calibration du visuel
-                        if (activeMode == AnnotationMode.CALIBRATE) RecomposeScope {
-                            CalibrationAssistantPanel(
-                                selectedReference = selectedCalibrationRef,
-                                onSelectReference = { ref ->
-                                    selectedCalibrationRef = ref
-                                    if (calibrationEdgePx != null && targetCenterPx != null) {
-                                        val rPx = hypot(calibrationEdgePx!!.x - targetCenterPx!!.x, calibrationEdgePx!!.y - targetCenterPx!!.y)
-                                        if (rPx > 5f && ref.radiusMm > 0f) {
-                                            pixelPerMm = rPx / ref.radiusMm
-                                        }
+                                // Type de cible avec Reconnaissance Auto Badge
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Type de cible :", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (detectedTargetResult?.visualFound == true) {
+                                        Text(
+                                            text = "🎯 Visuel repéré",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
                                     }
-                                },
-                                currentStep = calibrationStep,
-                                onStepChange = { step -> calibrationStep = step },
-                                pixelPerMm = pixelPerMm,
-                                isCenterPlaced = targetCenterPx != null,
-                                onFinishCalibration = {
-                                    activeMode = AnnotationMode.IMPACT
-                                    Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
                                 }
-                            )
-                        }
 
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(targetTypeOptions) { target ->
+                                        FilterChip(
+                                            selected = targetTypeInput == target,
+                                            onClick = {
+                                                targetTypeInput = target
+                                                if (target.contains("10m")) distanceInput = "10"
+                                                else if (target.contains("200m")) distanceInput = "200"
+                                            },
+                                            label = { Text(target, fontSize = 12.sp) }
+                                        )
+                                    }
+                                }
                         // 3. PHOTO LOADER & RECONNAISSANCE AUTOMATIQUE
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1654,6 +1604,78 @@ fun ShootRApp(
                                     )
                                 }
                             }
+                        }
+                            }
+                        }
+
+                        // 2. MODES DE POINTAGE
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                FilterChip(
+                                    selected = activeMode == AnnotationMode.CALIBRATE,
+                                    onClick = {
+                                        activeMode = AnnotationMode.CALIBRATE
+                                        if (targetCenterPx == null) {
+                                            calibrationStep = CalibrationStep.SET_CENTER
+                                        } else if (calibrationEdgePx == null) {
+                                            calibrationStep = CalibrationStep.CLICK_EDGE
+                                        } else {
+                                            calibrationStep = CalibrationStep.CALIBRATED
+                                        }
+                                    },
+                                    label = { Text("Calibrer visuel", fontSize = 13.sp) },
+                                    leadingIcon = { Icon(imageVector = Icons.Default.Straighten, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp)) },
+                                    modifier = Modifier.weight(1.2f),
+                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFF59E0B).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFBBF24))
+                                )
+                                FilterChip(
+                                    selected = activeMode == AnnotationMode.TARGET_CENTER,
+                                    onClick = { activeMode = AnnotationMode.TARGET_CENTER },
+                                    label = { Text("Centre", fontSize = 13.sp) },
+                                    leadingIcon = { Icon(imageVector = Icons.Default.CenterFocusStrong, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp)) },
+                                    modifier = Modifier.weight(0.9f),
+                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF10B981).copy(alpha = 0.25f), selectedLabelColor = Color(0xFF34D399))
+                                )
+                                FilterChip(
+                                    selected = activeMode == AnnotationMode.IMPACT,
+                                    onClick = { activeMode = AnnotationMode.IMPACT },
+                                    label = { Text("Impact", fontSize = 13.sp) },
+                                    leadingIcon = { Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp)) },
+                                    modifier = Modifier.weight(0.9f),
+                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFEF4444).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFF6B6B))
+                                )
+                            }
+                        }
+
+                        // Panneau d'assistance guidé à la calibration du visuel
+                        if (activeMode == AnnotationMode.CALIBRATE) RecomposeScope {
+                            CalibrationAssistantPanel(
+                                selectedReference = selectedCalibrationRef,
+                                onSelectReference = { ref ->
+                                    selectedCalibrationRef = ref
+                                    if (calibrationEdgePx != null && targetCenterPx != null) {
+                                        val rPx = hypot(calibrationEdgePx!!.x - targetCenterPx!!.x, calibrationEdgePx!!.y - targetCenterPx!!.y)
+                                        if (rPx > 5f && ref.radiusMm > 0f) {
+                                            pixelPerMm = rPx / ref.radiusMm
+                                        }
+                                    }
+                                },
+                                currentStep = calibrationStep,
+                                onStepChange = { step -> calibrationStep = step },
+                                pixelPerMm = pixelPerMm,
+                                isCenterPlaced = targetCenterPx != null,
+                                onFinishCalibration = {
+                                    activeMode = AnnotationMode.IMPACT
+                                    Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
+                                }
+                            )
                         }
 
                         // 4. CANEVAS AVEC PHOTO ET OVERLAYS
@@ -2925,5 +2947,38 @@ private fun ScoreLegendItem(color: Color, label: String, count: Int) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * Trace du parcours de saisie : chaque étape passe au vert ✓ quand elle est faite.
+ * Ordre fixe : arme, cible, calibrage, lecture des impacts, score.
+ */
+@Composable
+private fun ShootingStepper(
+    weaponReady: Boolean,
+    targetReady: Boolean,
+    calibrated: Boolean,
+    impactsReady: Boolean
+) {
+    val steps = listOf(
+        "1 Arme" to weaponReady,
+        "2 Cible" to targetReady,
+        "3 Calibrage" to calibrated,
+        "4 Impacts" to impactsReady,
+        "5 Score" to impactsReady
+    )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        steps.forEach { (label, done) ->
+            Text(
+                text = if (done) "✓ $label" else label,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (done) FontWeight.Bold else FontWeight.Medium,
+                color = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1
+            )
+        }
     }
 }
