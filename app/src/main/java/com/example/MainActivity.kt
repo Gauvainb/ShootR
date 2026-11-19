@@ -172,6 +172,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -2357,7 +2358,7 @@ fun ShootRApp(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                         Text(
                                             text = "Impacts & Points (Ajustement)",
                                             style = MaterialTheme.typography.titleMedium,
@@ -2376,6 +2377,8 @@ fun ShootRApp(
                                         Text(
                                             text = if (scoringEnabled) "$animatedScore pts (${innerTensCount.value}X)" else "Groupement seul",
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            maxLines = 1,
+                                            softWrap = false,
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -2507,7 +2510,7 @@ fun ShootRApp(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                         Text(
                                             text = "Télémétrie balistique (Groupement)",
                                             style = MaterialTheme.typography.titleMedium,
@@ -2523,6 +2526,8 @@ fun ShootRApp(
                                         Text(
                                             text = "${String.format(Locale.US, "%.2f", animatedMoa)} MOA",
                                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                            maxLines = 1,
+                                            softWrap = false,
                                             style = MaterialTheme.typography.titleSmall,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = MaterialTheme.colorScheme.onPrimary
@@ -2706,11 +2711,13 @@ fun ShootRApp(
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Column {
+                                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                                     Text(
                                                         text = s.optString("title", "Séance"),
                                                         style = MaterialTheme.typography.titleMedium,
-                                                        fontWeight = FontWeight.Bold
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
                                                     )
                                                     Text(
                                                         text = s.optString("date", ""),
@@ -2731,6 +2738,8 @@ fun ShootRApp(
                                                         Text(
                                                             text = if (hasScore) "$score pts${if (inTens > 0) " (${inTens}X)" else ""}" else "Groupement seul",
                                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            maxLines = 1,
+                                                            softWrap = false,
                                                             style = MaterialTheme.typography.labelSmall,
                                                             fontWeight = FontWeight.Bold,
                                                             color = Color(0xFF10B981)
@@ -2745,6 +2754,8 @@ fun ShootRApp(
                                                         Text(
                                                             text = "${String.format(Locale.US, "%.2f", s.optDouble("moa", 0.0))} MOA",
                                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                            maxLines = 1,
+                                                            softWrap = false,
                                                             style = MaterialTheme.typography.labelSmall,
                                                             fontWeight = FontWeight.Bold,
                                                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -3064,23 +3075,49 @@ private fun ShootingStepper(
     impactsReady: Boolean
 ) {
     val steps = listOf(
-        "1 Arme" to weaponReady,
-        "2 Cible" to targetReady,
-        "3 Calibrage" to calibrated,
-        "4 Impacts" to impactsReady,
-        "5 Score" to impactsReady
+        "Arme" to weaponReady,
+        "Cible" to targetReady,
+        "Calibrage" to calibrated,
+        "Impacts" to impactsReady,
+        "Score" to impactsReady
     )
+    // Une pastille (numéro, ou ✓ une fois faite) au-dessus du libellé : le libellé a toute la largeur
+    // de sa colonne et ne se coupe plus.
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        steps.forEach { (label, done) ->
-            Text(
-                text = if (done) "✓ $label" else label,
+        steps.forEachIndexed { index, (label, done) ->
+            Column(
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (done) FontWeight.Bold else FontWeight.Medium,
-                color = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                maxLines = 1
-            )
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .background(
+                            if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (done) "✓" else "${index + 1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (done) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (done) FontWeight.Bold else FontWeight.Medium,
+                    color = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
         }
     }
 }
