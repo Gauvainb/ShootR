@@ -186,6 +186,7 @@ import com.example.domain.ImpactDetectionParams
 import com.example.domain.ImpactDetector
 import com.example.domain.TargetCalibrationDefaults
 import com.example.domain.TargetDetectionResult
+import com.example.domain.PhotoCalibration
 import com.example.domain.Scoring
 import com.example.domain.TargetRecognitionEngine
 import com.example.domain.TargetSpecs
@@ -239,6 +240,9 @@ data class Weapon(
 
 /** Pixels per millimetre used until a photo is calibrated; a placeholder, never a real scale. */
 private const val FALLBACK_PX_PER_MM = 4f
+
+/** Finger travel, in screen pixels, below which a touch on an impact is a tap, not a move. */
+private const val TAP_SLOP_PX = 12f
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -344,6 +348,9 @@ fun ShootRApp(
     var calibrationStep by remember { mutableStateOf(CalibrationStep.SET_CENTER) }
     var calibrationEdgePx by remember { mutableStateOf<Offset?>(null) }
     var pixelPerMm by remember { mutableFloatStateOf(0f) }
+    // Width / height of the photo on screen, known once it is loaded (0 until then).
+    var photoAspect by remember { mutableFloatStateOf(0f) }
+    var pendingCalibration by remember { mutableStateOf<PhotoCalibration?>(null) }
 
     // Keep calibration preset in sync with target type selection
     LaunchedEffect(targetTypeInput) {
@@ -446,6 +453,20 @@ fun ShootRApp(
         }
     }
 
+    // Calibration saved with a reopened session, waiting for the canvas size to be known.
+    LaunchedEffect(pendingCalibration, canvasWidthPx, canvasHeightPx) {
+        val saved = pendingCalibration ?: return@LaunchedEffect
+        if (canvasWidthPx <= 0f || canvasHeightPx <= 0f) return@LaunchedEffect
+        val center = saved.centerOnCanvas(canvasWidthPx, canvasHeightPx)
+        val pxMm = saved.pxPerMmOnCanvas(canvasWidthPx, canvasHeightPx)
+        if (photoAspect <= 0f) photoAspect = saved.imageAspectRatio
+        targetCenterPx = center
+        pixelPerMm = pxMm
+        calibrationEdgePx = Offset(center.x + selectedCalibrationRef.radiusMm * pxMm, center.y)
+        calibrationStep = CalibrationStep.CALIBRATED
+        pendingCalibration = null
+    }
+
     // A session reopened before its photo is calibrated keeps its saved mm values; they are placed
     // on the canvas as soon as a scale and a center exist.
     LaunchedEffect(pixelPerMm, targetCenterPx) {
@@ -478,6 +499,7 @@ fun ShootRApp(
         if (visualRadiusPx <= 0f) return false
 
         targetCenterPx = detectedCenter
+        photoAspect = result.imageAspectRatio
         pixelPerMm = visualRadiusPx * 2f / result.visualDiameterMm
         // Show the calibration ring on the visual it was measured on
         TargetCalibrationDefaults.references
@@ -580,6 +602,7 @@ fun ShootRApp(
 
     // A new photo: whatever was found or calibrated on the previous one no longer applies.
     fun resetPhotoAnalysis() {
+        pendingCalibration = null
         detectedTargetResult = null
         showTargetDetectionDialog = false
         pixelPerMm = 0f
@@ -631,8 +654,20 @@ fun ShootRApp(
 
             val imgUriStr = sessionObj.optString("imageUri", "")
             selectedImageUri = if (imgUriStr.isNotBlank()) Uri.parse(imgUriStr) else null
-            // Calibration is not saved with a session: what is on screen belongs to another photo.
+            // What is on screen belongs to another photo; the session's own calibration, when it was
+            // saved, is restored once the canvas size is known.
             resetPhotoAnalysis()
+            pendingCalibration = sessionObj.optJSONObject("calibration")?.let { c ->
+                val mmToPhoto = c.optDouble("mmToPhoto", 0.0).toFloat()
+                val aspect = c.optDouble("aspect", 0.0).toFloat()
+                if (mmToPhoto > 0f && aspect > 0f && selectedImageUri != null) {
+                    PhotoCalibration(
+                        Offset(c.optDouble("centerX", 0.5).toFloat(), c.optDouble("centerY", 0.5).toFloat()),
+                        mmToPhoto,
+                        aspect
+                    )
+                } else null
+            }
 
             // Reconstruct impacts
             impactsList.clear()
@@ -694,6 +729,21 @@ fun ShootRApp(
             sessionObj.put("ammo", ammoInput.ifBlank { "Munition libre" })
             sessionObj.put("notes", notesInput)
             sessionObj.put("imageUri", imageUri)
+            // Calibration relative to the photo, so that a reopened session shows its impacts at
+            // the same place whatever the size of the canvas.
+            val center = targetCenterPx
+            if (imageUri.isNotBlank() && center != null) {
+                PhotoCalibration.fromCanvas(center, pixelPerMm, canvasWidthPx, canvasHeightPx, photoAspect)?.let { cal ->
+                    sessionObj.put(
+                        "calibration",
+                        JSONObject()
+                            .put("centerX", cal.centerNormalized.x.toDouble())
+                            .put("centerY", cal.centerNormalized.y.toDouble())
+                            .put("mmToPhoto", cal.mmToPhoto.toDouble())
+                            .put("aspect", cal.imageAspectRatio.toDouble())
+                    )
+                }
+            }
             sessionObj.put("shotsCount", impactsList.size)
             if (scoringEnabled) {
                 sessionObj.put("totalScore", totalScore.value)
@@ -1849,13 +1899,17 @@ fun ShootRApp(
 
                                                         if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
                                                             val idx = draggedImpactIndex!!
-                                                            impactsList[idx] = impactsList[idx].copy(
-                                                                isAuto = false,
-                                                                canvasOffset = currentLocalPoint,
-                                                                realMm = realImp,
-                                                                score = sc,
-                                                                isInnerTen = inner
-                                                            )
+                                                            // Below the tap threshold the finger only jitters: the impact
+                                                            // stays where it is and, if detected, stays unconfirmed.
+                                                            if (moveDist >= TAP_SLOP_PX) {
+                                                                impactsList[idx] = impactsList[idx].copy(
+                                                                    isAuto = false,
+                                                                    canvasOffset = currentLocalPoint,
+                                                                    realMm = realImp,
+                                                                    score = sc,
+                                                                    isInnerTen = inner
+                                                                )
+                                                            }
                                                             draggedImpactIndexState = idx
                                                             dragHudText = "🎯 Coup #${impactsList[idx].index} : $scoreLabel (${String.format(Locale.US, "%+.1f", xMm)}, ${String.format(Locale.US, "%+.1f", yMm)} mm)"
                                                         } else {
@@ -1910,7 +1964,7 @@ fun ShootRApp(
 
                                                     if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
                                                         val idx = draggedImpactIndex!!
-                                                        if (totalMove < 12f) {
+                                                        if (totalMove < TAP_SLOP_PX) {
                                                             // Tap court sans déplacement : ouvre le dialogue d'ajustement
                                                             impactUnderEdit = impactsList[idx]
                                                             showImpactEditDialog = true
@@ -1983,6 +2037,10 @@ fun ShootRApp(
                                         model = imageRequest,
                                         contentDescription = "Cible de tir",
                                         contentScale = ContentScale.Fit,
+                                        onSuccess = { state ->
+                                            val size = state.painter.intrinsicSize
+                                            if (size.width > 0f && size.height > 0f) photoAspect = size.width / size.height
+                                        },
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
@@ -2340,9 +2398,22 @@ fun ShootRApp(
                                         )
                                         TextButton(
                                             onClick = {
-                                                val kept = impactsList.filter { !it.isAuto }.mapIndexed { i, imp -> imp.copy(index = i + 1) }
+                                                val before = impactsList.toList()
+                                                val kept = withoutUnconfirmedDetections(before)
+                                                val removed = before.size - kept.size
                                                 impactsList.clear()
                                                 impactsList.addAll(kept)
+                                                coroutineScope.launch {
+                                                    val result = snackbarHostState.showSnackbar(
+                                                        message = "$removed impact${if (removed > 1) "s" else ""} détecté${if (removed > 1) "s" else ""} retiré${if (removed > 1) "s" else ""}",
+                                                        actionLabel = "Annuler",
+                                                        duration = SnackbarDuration.Long
+                                                    )
+                                                    if (result == SnackbarResult.ActionPerformed) {
+                                                        impactsList.clear()
+                                                        impactsList.addAll(before)
+                                                    }
+                                                }
                                             },
                                             modifier = Modifier.testTag("remove_detected_impacts_button")
                                         ) {
