@@ -84,6 +84,26 @@ class LocalJsonStoreTest {
         assertNull(LocalJsonStore.copyPhoto(context, missing, 7L))
     }
 
+    @Test
+    fun `a first launch seeds the ammunition library and reads it back unchanged`() = runBlocking {
+        val seeded = LocalJsonStore.loadAmmo(context)
+        assertEquals(5, seeded.size)
+        assertEquals(seeded, LocalJsonStore.loadAmmo(context))
+    }
+
+    @Test
+    fun `an unreadable ammunition library is kept as a copy instead of being silently lost`() = runBlocking {
+        val garbage = "[ not json"
+        File(context.filesDir, "ammo_library.json").writeText(garbage)
+
+        assertTrue(LocalJsonStore.loadAmmo(context).isEmpty())
+
+        val copies = context.filesDir.listFiles { f -> f.name.startsWith("ammo_library.corrupt-") }.orEmpty()
+        assertEquals(1, copies.size)
+        assertEquals(garbage, copies.single().readText())
+    }
+
+    @Test
     fun `weapons round trip`() = runBlocking {
         val defaults = LocalJsonStore.loadWeapons(context)
         assertEquals(5, defaults.size)

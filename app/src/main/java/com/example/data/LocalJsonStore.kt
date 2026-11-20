@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import android.net.Uri
+import com.example.Ammo
 import com.example.Weapon
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,7 +17,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * JSON file persistence for the session history and the weapons library.
+ * JSON file persistence for the session history and the weapons and ammunition libraries.
  *
  * All disk access runs on a single background thread: reads never block the UI thread, and writes
  * are applied in the order they were requested. Writes outlive the screen that requested them.
@@ -24,6 +25,7 @@ import java.util.Locale
 object LocalJsonStore {
     private const val SESSIONS_FILE = "sessions_history.json"
     private const val WEAPONS_FILE = "weapons_library.json"
+    private const val AMMO_FILE = "ammo_library.json"
     private const val PHOTOS_DIR = "session_photos"
 
     private val diskDispatcher = Dispatchers.IO.limitedParallelism(1)
@@ -99,6 +101,60 @@ object LocalJsonStore {
         photosDir(context).deleteRecursively()
         Unit
     }
+    /** Ammunition library. Seeds a few common loads on first launch. */
+    suspend fun loadAmmo(context: Context): List<Ammo> {
+        val filesDir = context.applicationContext.filesDir
+        return withContext(diskDispatcher) {
+            try {
+                val file = File(filesDir, AMMO_FILE)
+                if (file.exists()) {
+                    val array = JSONArray(file.readText())
+                    List(array.length()) { i ->
+                        val obj = array.getJSONObject(i)
+                        Ammo(
+                            id = obj.optLong("id", System.currentTimeMillis() + i),
+                            name = obj.optString("name", "Munition"),
+                            caliber = obj.optString("caliber", ""),
+                            notes = obj.optString("notes", "")
+                        )
+                    }
+                } else {
+                    defaultAmmo().also { writeAtomically(file, ammoToJson(it)) }
+                }
+            } catch (_: Exception) {
+                keepUnreadableCopy(File(filesDir, AMMO_FILE))
+                emptyList()
+            }
+        }
+    }
+
+    fun saveAmmo(context: Context, ammo: List<Ammo>) {
+        val filesDir = context.applicationContext.filesDir
+        val snapshot = ammo.toList()
+        writeScope.launch {
+            try {
+                writeAtomically(File(filesDir, AMMO_FILE), ammoToJson(snapshot))
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun ammoToJson(ammo: List<Ammo>): String {
+        val array = JSONArray()
+        ammo.forEach { a ->
+            array.put(JSONObject().put("id", a.id).put("name", a.name).put("caliber", a.caliber).put("notes", a.notes))
+        }
+        return array.toString()
+    }
+
+    private fun defaultAmmo(): List<Ammo> = listOf(
+        Ammo(1L, "SK Rifle Match 40gr", ".22 LR", "Subsonique"),
+        Ammo(2L, "Lapua Center-X", ".22 LR", ""),
+        Ammo(3L, "Geco FMJ 124gr", "9x19 mm", ""),
+        Ammo(4L, "Sellier & Bellot HPBT 168gr", ".308 Win", ""),
+        Ammo(5L, "RWS R10 Match", "4.5 mm", "Plombs")
+    )
+
     /** Weapons library. Seeds default weapons on first launch. */
     suspend fun loadWeapons(context: Context): List<Weapon> {
         val filesDir = context.applicationContext.filesDir
