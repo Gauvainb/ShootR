@@ -363,6 +363,17 @@ fun ShootRApp(
     var targetCenterPx by remember { mutableStateOf<Offset?>(null) }
     val impactsList = remember { mutableStateListOf<ScreenImpact>() }
 
+    // Calibration the user validated at step 3 (center, scale, state). Impacts can be entered only
+    // while the current calibration is exactly this one: any change at step 3 asks for a new
+    // validation, and a new photo clears it.
+    var validatedCalibration by remember { mutableStateOf<Triple<Offset?, Float, CalibrationStep>?>(null) }
+    fun isCalibrationValidated(): Boolean =
+        calibrationStep == CalibrationStep.CALIBRATED && pixelPerMm > 0f &&
+            validatedCalibration == Triple(targetCenterPx, pixelPerMm, calibrationStep)
+    fun markCalibrationValidated() {
+        validatedCalibration = Triple(targetCenterPx, pixelPerMm, calibrationStep)
+    }
+
     // Micro-animation: a ring expands from each impact as it is placed.
     val latestPulse = remember { Animatable(1f) }
     var knownImpactCount by remember { mutableIntStateOf(0) }
@@ -466,6 +477,8 @@ fun ShootRApp(
         pixelPerMm = pxMm
         calibrationEdgePx = Offset(center.x + selectedCalibrationRef.radiusMm * pxMm, center.y)
         calibrationStep = CalibrationStep.CALIBRATED
+        // This calibration was validated when the session was saved.
+        markCalibrationValidated()
         pendingCalibration = null
     }
 
@@ -520,6 +533,11 @@ fun ShootRApp(
 
     fun detectImpactsOnPhoto() {
         val imageUri = selectedImageUri ?: return
+        // Impacts only on a validated calibration: center and scale are what scoring relies on.
+        if (!isCalibrationValidated()) {
+            Toast.makeText(context, "Validez d'abord le calibrage à l'étape 3.", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (isDetectingImpacts) return
         if (isAnalyzingTarget) {
             Toast.makeText(context, "Analyse de la photo en cours, réessayez dans un instant.", Toast.LENGTH_SHORT).show()
@@ -605,12 +623,32 @@ fun ShootRApp(
     // A new photo: whatever was found or calibrated on the previous one no longer applies.
     fun resetPhotoAnalysis() {
         pendingCalibration = null
+        validatedCalibration = null
         detectedTargetResult = null
         showTargetDetectionDialog = false
         pixelPerMm = 0f
         calibrationEdgePx = null
         calibrationStep = CalibrationStep.SET_CENTER
         targetCenterPx = Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+    }
+
+    // Step 3 -> 4: the calibration must be complete (center and edge of the visual) and is then
+    // frozen. Impacts are looked for on the first validation of a photo.
+    fun validateCalibrationAndContinue() {
+        if (selectedImageUri == null || calibrationStep != CalibrationStep.CALIBRATED || pixelPerMm <= 0f) {
+            Toast.makeText(context, "Terminez le calibrage : placez le centre puis le bord du visuel.", Toast.LENGTH_LONG).show()
+            return
+        }
+        markCalibrationValidated()
+        activeMode = AnnotationMode.IMPACT
+        shootingStep = 3
+        if (impactsList.isEmpty()) detectImpactsOnPhoto()
+    }
+
+    // The step decides the mode: impacts at step 4, calibration at step 3.
+    LaunchedEffect(shootingStep) {
+        if (shootingStep == 3) activeMode = AnnotationMode.IMPACT
+        else if (shootingStep == 2 && activeMode == AnnotationMode.IMPACT) activeMode = AnnotationMode.CALIBRATE
     }
 
     // Looks for the black visual. The result is dropped if the photo changed in the meantime.
@@ -707,6 +745,8 @@ fun ShootRApp(
             }
 
             currentTab = AppTab.SHOOTING_RANGE
+            // With its saved calibration the session opens on the impacts; without, on the calibration.
+            shootingStep = if (pendingCalibration != null) 3 else 2
             Toast.makeText(context, "Séance chargée : vous pouvez ajuster les points et impacts a posteriori.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(context, "Erreur chargement séance : ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
@@ -867,7 +907,7 @@ fun ShootRApp(
                                 Text("En appliquant :", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                                 Text("• Centre placé au milieu du visuel", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("• Échelle calculée pour un visuel de ${result.visualDiameterMm} mm", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("• Impacts recherchés automatiquement", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("• Impacts recherchés une fois le calibrage validé", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("Si ce n'est pas la bonne cible, fermez, changez le type de cible puis relancez « Scanner cible ».", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
@@ -881,10 +921,9 @@ fun ShootRApp(
                             applyDetectedCalibration(result)
 
                             showTargetDetectionDialog = false
-                            Toast.makeText(context, "Cible calibrée automatiquement.", Toast.LENGTH_SHORT).show()
-
-                            // The target is now centered and scaled: look for the impacts right away.
-                            detectImpactsOnPhoto()
+                            // Impacts are looked for only once the user has checked and validated this
+                            // calibration at step 3.
+                            Toast.makeText(context, "Cible calibrée : vérifiez le centre et le bord, puis validez le calibrage.", Toast.LENGTH_LONG).show()
                         }
                     ) {
                         Text("Appliquer & Calibrer")
@@ -1461,7 +1500,14 @@ fun ShootRApp(
                             calibrated = pixelPerMm > 0f,
                             impactsReady = impactsList.isNotEmpty(),
                             currentStep = shootingStep,
-                            onStepClick = { shootingStep = it }
+                            onStepClick = { step ->
+                                // Impacts and score only on a validated calibration.
+                                if (step >= 3 && !isCalibrationValidated()) {
+                                    Toast.makeText(context, "Validez d'abord le calibrage à l'étape 3.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    shootingStep = step
+                                }
+                            }
                         )
 
                         if (shootingStep == 0) {
@@ -1692,14 +1738,6 @@ fun ShootRApp(
                                     modifier = Modifier.weight(0.9f),
                                     colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF10B981).copy(alpha = 0.25f), selectedLabelColor = Color(0xFF34D399))
                                 )
-                                FilterChip(
-                                    selected = activeMode == AnnotationMode.IMPACT,
-                                    onClick = { activeMode = AnnotationMode.IMPACT },
-                                    label = { Text("Impact", fontSize = 13.sp) },
-                                    leadingIcon = { Icon(imageVector = Icons.Default.AdsClick, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp)) },
-                                    modifier = Modifier.weight(0.9f),
-                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFEF4444).copy(alpha = 0.25f), selectedLabelColor = Color(0xFFFF6B6B))
-                                )
                             }
                         }
 
@@ -1721,8 +1759,7 @@ fun ShootRApp(
                                 pixelPerMm = pixelPerMm,
                                 isCenterPlaced = targetCenterPx != null,
                                 onFinishCalibration = {
-                                    activeMode = AnnotationMode.IMPACT
-                                    Toast.makeText(context, "Étalonnage validé ! Vous pouvez placer vos impacts.", Toast.LENGTH_SHORT).show()
+                                    validateCalibrationAndContinue()
                                 }
                             )
                         }
@@ -1748,6 +1785,25 @@ fun ShootRApp(
                             }
                         }
 
+                        }
+                        if (shootingStep == 3) {
+                            // Step 4 never changes the calibration: redoing it means going back to step 3.
+                            val validated = isCalibrationValidated()
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (validated) "Calibrage validé (${String.format(Locale.US, "%.2f", pixelPerMm)} px/mm)."
+                                    else "Calibrage non validé : saisie des impacts bloquée.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (validated) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { shootingStep = 2 }) {
+                                    Text(if (validated) "Refaire le calibrage" else "Aller au calibrage", fontSize = 14.sp)
+                                }
+                            }
                         }
                         if (shootingStep == 2 || shootingStep == 3) {
                         // 4. CANEVAS AVEC PHOTO ET OVERLAYS
@@ -1782,13 +1838,21 @@ fun ShootRApp(
                                         val distToCenter = hypot(initialLocalPoint.x - currentCenter.x, initialLocalPoint.y - currentCenter.y)
                                         val distToRing = kotlin.math.abs(distToCenter - visualRadiusPx)
 
+
+                                        // The step decides what a finger does: step 3 only calibrates, step 4
+                                        // only places impacts, and only once the calibration is validated.
+                                        val gestureMode: AnnotationMode? = when (shootingStep) {
+                                            2 -> activeMode.takeIf { it != AnnotationMode.IMPACT }
+                                            3 -> AnnotationMode.IMPACT.takeIf { isCalibrationValidated() }
+                                            else -> null
+                                        }
                                         // Check if down on an existing impact
                                         val hitRadiusImpact = 35f / scale
                                         val tappedImpactIdx = impactsList.indexOfFirst { imp ->
                                             hypot(imp.canvasOffset.x - initialLocalPoint.x, imp.canvasOffset.y - initialLocalPoint.y) <= hitRadiusImpact
                                         }
 
-                                        if (activeMode == AnnotationMode.CALIBRATE) {
+                                        if (gestureMode == AnnotationMode.CALIBRATE) {
                                             activeDragTarget = when {
                                                 calibrationStep == CalibrationStep.SET_CENTER -> "CENTER"
                                                 calibrationStep == CalibrationStep.CLICK_EDGE -> "DIAMETER"
@@ -1796,9 +1860,9 @@ fun ShootRApp(
                                                 distToRing < 45f / scale -> "DIAMETER"
                                                 else -> "DIAMETER"
                                             }
-                                        } else if (activeMode == AnnotationMode.TARGET_CENTER) {
+                                        } else if (gestureMode == AnnotationMode.TARGET_CENTER) {
                                             activeDragTarget = "CENTER"
-                                        } else if (activeMode == AnnotationMode.IMPACT) {
+                                        } else if (gestureMode == AnnotationMode.IMPACT) {
                                             if (tappedImpactIdx >= 0) {
                                                 draggedImpactIndex = tappedImpactIdx
                                                 draggedImpactIndexState = tappedImpactIdx
@@ -1869,7 +1933,8 @@ fun ShootRApp(
 
                                                 isUserDragging = true
 
-                                                when (activeMode) {
+                                                when (gestureMode) {
+                                                    null -> {}
                                                     AnnotationMode.CALIBRATE -> {
                                                         if (activeDragTarget == "CENTER") {
                                                             // Déplacement dynamique du centre vert en gardant le doigt appuyé
@@ -1948,7 +2013,8 @@ fun ShootRApp(
                                             val upLocalPoint = Offset(localX, localY)
                                             val totalMove = hypot(upScreenPos.x - firstDownPos.x, upScreenPos.y - firstDownPos.y)
 
-                                            when (activeMode) {
+                                            when (gestureMode) {
+                                                null -> {}
                                                 AnnotationMode.CALIBRATE -> {
                                                     if (activeDragTarget == "CENTER" || calibrationStep == CalibrationStep.SET_CENTER) {
                                                         targetCenterPx = upLocalPoint
@@ -2338,7 +2404,11 @@ fun ShootRApp(
 
                         }
                         if (shootingStep == 2) {
-                            StepNav(onPrevious = { shootingStep = 1 }, onNext = { shootingStep = 3 })
+                            StepNav(
+                                onPrevious = { shootingStep = 1 },
+                                onNext = { validateCalibrationAndContinue() },
+                                nextLabel = "Valider le calibrage"
+                            )
                         }
                         if (shootingStep == 3) {
                         // 5. TABLEAU D'AJUSTEMENT RÉTROACTIF DES IMPACTS (A POSTERIORI)
@@ -3153,7 +3223,7 @@ private fun ShootingStepper(
  * d'écran voisin. Les boutons ont 48 dp de haut, zone tactile recommandée.
  */
 @Composable
-private fun StepNav(onPrevious: (() -> Unit)?, onNext: (() -> Unit)?) {
+private fun StepNav(onPrevious: (() -> Unit)?, onNext: (() -> Unit)?, nextLabel: String = "Suivant") {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3170,7 +3240,7 @@ private fun StepNav(onPrevious: (() -> Unit)?, onNext: (() -> Unit)?) {
         }
         if (onNext != null) {
             Button(onClick = onNext, modifier = Modifier.height(48.dp), shape = RoundedCornerShape(10.dp)) {
-                Text("Suivant", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(nextLabel, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
