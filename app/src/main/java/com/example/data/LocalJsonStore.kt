@@ -1,6 +1,7 @@
 package com.example.data
 
 import android.content.Context
+import android.net.Uri
 import com.example.Weapon
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,11 +24,12 @@ import java.util.Locale
 object LocalJsonStore {
     private const val SESSIONS_FILE = "sessions_history.json"
     private const val WEAPONS_FILE = "weapons_library.json"
+    private const val PHOTOS_DIR = "session_photos"
 
     private val diskDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val writeScope = CoroutineScope(SupervisorJob() + diskDispatcher)
 
-    /** Saved sessions, newest first. Seeds sample sessions on first launch. */
+    /** Saved sessions, newest first. Empty until the user saves one: no sample data is ever added. */
     suspend fun loadSessions(context: Context): List<JSONObject> {
         val filesDir = context.applicationContext.filesDir
         return withContext(diskDispatcher) {
@@ -37,10 +39,12 @@ object LocalJsonStore {
                     val array = JSONArray(file.readText())
                     List(array.length()) { array.getJSONObject(it) }
                 } else {
-                    sampleSessions().also { writeAtomically(file, toJson(it)) }
+                    emptyList()
                 }
                 sessions.sortedByDescending { it.optLong("id", 0L) }
             } catch (_: Exception) {
+                // Unreadable file: keep a copy before the next save replaces it with the new history.
+                keepUnreadableCopy(File(filesDir, SESSIONS_FILE))
                 emptyList()
             }
         }
@@ -57,6 +61,44 @@ object LocalJsonStore {
         }
     }
 
+
+    /** Folder of the session photos, inside the app's private storage. */
+    private fun photosDir(context: Context): File =
+        File(context.applicationContext.filesDir, PHOTOS_DIR)
+
+    /** True when [uri] already points to a photo kept in private storage. */
+    fun isPrivatePhoto(context: Context, uri: Uri): Boolean {
+        if (uri.scheme != "file") return false
+        val path = uri.path ?: return false
+        return try {
+            File(path).canonicalPath.startsWith(photosDir(context).canonicalPath + File.separator)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Copies a session photo into private storage and returns its file URI, or null when the source
+     * cannot be read. The copy is named after the session, so saving again replaces it.
+     */
+    suspend fun copyPhoto(context: Context, source: Uri, sessionId: Long): Uri? = withContext(diskDispatcher) {
+        try {
+            val dir = photosDir(context).apply { mkdirs() }
+            val target = File(dir, "session-$sessionId.jpg")
+            context.contentResolver.openInputStream(source)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: return@withContext null
+            Uri.fromFile(target)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Removes every session photo, e.g. when the history is cleared. */
+    suspend fun deletePhotos(context: Context) = withContext(diskDispatcher) {
+        photosDir(context).deleteRecursively()
+        Unit
+    }
     /** Weapons library. Seeds default weapons on first launch. */
     suspend fun loadWeapons(context: Context): List<Weapon> {
         val filesDir = context.applicationContext.filesDir
@@ -80,6 +122,7 @@ object LocalJsonStore {
                     defaultWeapons().also { writeAtomically(file, weaponsToJson(it)) }
                 }
             } catch (_: Exception) {
+                keepUnreadableCopy(File(filesDir, WEAPONS_FILE))
                 emptyList()
             }
         }
@@ -118,6 +161,18 @@ object LocalJsonStore {
         return array.toString()
     }
 
+    /**
+     * Copies an unreadable store file to `<name>.corrupt-<timestamp>.json` so its content can be
+     * recovered by hand. Never throws: this runs while a read is already failing.
+     */
+    private fun keepUnreadableCopy(file: File) {
+        if (!file.exists()) return
+        runCatching {
+            val stamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT).format(Date())
+            file.copyTo(File(file.parentFile, "${file.nameWithoutExtension}.corrupt-$stamp.json"))
+        }
+    }
+
     /** Writes to a temp file then renames it, so a crash mid-write cannot corrupt the store. */
     private fun writeAtomically(target: File, content: String) {
         val tmp = File(target.parentFile, target.name + ".tmp")
@@ -135,57 +190,4 @@ object LocalJsonStore {
         Weapon(4L, "Tikka T3x TAC A1", "Fusil de précision", ".308 Win", "Lunette Schmidt & Bender 5-25x56"),
         Weapon(5L, "Smith & Wesson 686", "Revolver", ".357 Magnum", "Hausse réglable")
     )
-
-    private fun sampleSessions(): List<JSONObject> {
-        val now = System.currentTimeMillis()
-        val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRANCE)
-        val samples = listOf(
-            Triple(now - 86400000L * 4, 1.45f, 21.1f),
-            Triple(now - 86400000L * 3, 1.20f, 17.5f),
-            Triple(now - 86400000L * 2, 0.95f, 13.8f),
-            Triple(now - 86400000L * 1, 0.82f, 11.9f)
-        )
-        val offsets = listOf(
-            Pair(5.0, 4.0),
-            Pair(-4.0, 6.0),
-            Pair(2.0, -3.0),
-            Pair(8.0, 10.0),
-            Pair(-6.0, -5.0)
-        )
-        return samples.map { (time, moaVal, esVal) ->
-            val obj = JSONObject()
-            obj.put("id", time)
-            obj.put("title", "Entraînement Précision 50m")
-            obj.put("date", dateFormat.format(Date(time)))
-            obj.put("weapon", "CZ 457 Varmint")
-            obj.put("caliber", ".22 LR")
-            obj.put("targetType", "C50 (25m/50m)")
-            obj.put("distanceMeters", 50.0)
-            obj.put("ammo", "SK Rifle Match 40gr")
-            obj.put("notes", "Bon groupement serré, météo calme.")
-            obj.put("shotsCount", 5)
-            obj.put("totalScore", 48)
-            obj.put("innerTens", 2)
-            obj.put("esMm", esVal.toDouble())
-            obj.put("hMm", (esVal * 0.8).toDouble())
-            obj.put("lMm", (esVal * 0.7).toDouble())
-            obj.put("hPlusL", (esVal * 1.5).toDouble())
-            obj.put("moa", moaVal.toDouble())
-            obj.put("mpiDeltaXMm", 1.2)
-            obj.put("mpiDeltaYMm", -0.8)
-
-            val imps = JSONArray()
-            offsets.forEachIndexed { i, (x, y) ->
-                val impObj = JSONObject()
-                impObj.put("index", i + 1)
-                impObj.put("xMm", x)
-                impObj.put("yMm", y)
-                impObj.put("score", if (i < 3) 10 else 9)
-                impObj.put("isInnerTen", i == 0 || i == 2)
-                imps.put(impObj)
-            }
-            obj.put("impacts", imps)
-            obj
-        }
-    }
 }

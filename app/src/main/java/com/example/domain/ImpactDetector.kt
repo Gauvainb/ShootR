@@ -190,7 +190,7 @@ object ImpactDetector {
         }
 
         // 3. Candidate pixels.
-        val brightInVisual = inkLevel + contrast * 0.22f
+        val brightInVisual = inkLevel + contrast * 0.18f
         val paperDeviation = max(12f, contrast * 0.065f)
         val inkLike = inkLevel + contrast * 0.35f
         val whiteLike = paperLevel - contrast * 0.15f
@@ -228,9 +228,44 @@ object ImpactDetector {
             }
         }
 
+        // Objects in front of the target (gun, hand): large regions that are neither ink nor
+        // paper. Marks on them or right next to them are reflections and edges, not holes. On a
+        // reactive target the yellow halos are left out: merged halos can be large too.
+        val reactiveLook = hasVisual && visualPixels > 0 && yellowInVisual > visualPixels * 0.004f
+        val yellowZone = if (reactiveLook) dilate(yellow, width, height, max(1, (5f * pxPerMm).roundToInt())) else null
+        val notInkNorPaper = BooleanArray(n) {
+            if (yellowZone != null && yellowZone[it]) false
+            else if (inVisual[it]) luma[it] > inkLevel + contrast * 0.1f else candidate[it]
+        }
+        val objects = dilate(
+            largeRegions(
+                notInkNorPaper, width, height, max(1, (0.75f * pxPerMm).roundToInt()),
+                minArea = areaOf(60f * pxPerMm).toInt()
+            ),
+            width, height, max(1, (6f * pxPerMm).roundToInt())
+        )
+
         val impacts = ArrayList<Offset>()
+        // A hole must stand out from its immediate surroundings (see surroundContrast).
+        // On the paper the threshold is high: the edge of the card, transparent pasters and shadows
+        // differ only a little from their surroundings. In the visual, printed rings and digits are
+        // already handled by the opening and the digit test, and a hole may be dim (dark backing).
+        val minContrastOnPaper = max(25f, contrast * 0.17f)
+        val minContrastInVisual = 15f
+        fun standsOut(blob: Blob, pixels: IntArray): Boolean {
+            val c = surroundContrast(blob, pixels, width, height, luma, argb)
+            return c >= if (blob.inVisual) minContrastInVisual else minContrastOnPaper
+        }
         fun accept(blob: Blob, pixels: IntArray, singleArea: Float) {
             if (abs(blob.x - centerX) > cardHalfSize || abs(blob.y - centerY) > cardHalfSize) return
+            if (objects[blob.y.roundToInt().coerceIn(0, height - 1) * width + blob.x.roundToInt().coerceIn(0, width - 1)]) {
+                trace?.invoke(blob.x, blob.y, "object")
+                return
+            }
+            if (!standsOut(blob, pixels)) {
+                trace?.invoke(blob.x, blob.y, "flat")
+                return
+            }
             val verdict = classify(blob, pixels, singleArea, pxPerMm, width, height, impacts)
             trace?.invoke(blob.x, blob.y, verdict)
         }
@@ -247,7 +282,7 @@ object ImpactDetector {
                 halo, width, height, max(1, (1.5f * pxPerMm).roundToInt()), luma, inVisual,
                 inkLike, paperFloor, whiteLike, centerX, centerY, minArea = (PI * square(2.5f * pxPerMm)).toInt()
             )
-            val haloArea = typicalArea(haloBlobs.list, areaOf(5f * pxPerMm), areaOf(30f * pxPerMm))
+            val haloArea = typicalArea(haloBlobs.list.filter { standsOut(it, haloBlobs.pixels) }, areaOf(5f * pxPerMm), areaOf(30f * pxPerMm))
             if (haloArea != null) haloBlobs.list.forEach { accept(it, haloBlobs.pixels, haloArea) }
             measuredHaloArea = haloArea
             bare = BooleanArray(n) { candidate[it] && !nearYellow[it] }
@@ -262,8 +297,10 @@ object ImpactDetector {
             bare, width, height, max(1, (0.75f * pxPerMm).roundToInt()), luma, inVisual,
             inkLike, paperFloor, whiteLike, centerX, centerY, minArea = (smallest * 0.3f).toInt()
         )
-        val inside = firstPass.list.filter { it.inVisual }
-        val outside = firstPass.list.filter { !it.inVisual }
+        // Only marks that stand out from their surroundings tell the size of a hole.
+        val measurable = firstPass.list.filter { standsOut(it, firstPass.pixels) }
+        val inside = measurable.filter { it.inVisual }
+        val outside = measurable.filter { !it.inVisual }
         // On a reactive target the plain marks left inside the visual are mostly halo leftovers:
         // measure the holes on the paper instead.
         var areaInVisual = if (reactive) null else typicalArea(inside, smallest, areaOf(maxDiameterMm * pxPerMm), minCount = 3)
@@ -296,6 +333,15 @@ object ImpactDetector {
             bare, width, height, max(1, (holeDiameter * 0.225f).roundToInt()), luma, inVisual,
             inkLike, paperFloor, whiteLike, centerX, centerY, minArea = (holeAreaInVisual * 0.15f).toInt()
         )
+        // The opening of the second pass trims the outline of every mark a little: measure a
+        // single hole again on this pass, so that a cluster is compared with a hole of the same pass.
+        val secondMeasurable = secondPass.list.filter { standsOut(it, secondPass.pixels) }
+        val singleInVisual = typicalArea(
+            secondMeasurable.filter { it.inVisual }, holeAreaInVisual * 0.6f, holeAreaInVisual * 1.4f
+        ) ?: holeAreaInVisual
+        val singleOnPaper = typicalArea(
+            secondMeasurable.filter { !it.inVisual }, holeAreaOnPaper * 0.6f, holeAreaOnPaper * 1.4f
+        ) ?: holeAreaOnPaper
         // Strokes of printed digits are about 1.5 mm wide; the core of a hole is wider than this.
         val minCore = max(4f, 2.6f * pxPerMm)
         for (blob in secondPass.list) {
@@ -308,7 +354,7 @@ object ImpactDetector {
                     trace?.invoke(blob.x, blob.y, "digit")
                     continue
                 }
-                accept(blob, secondPass.pixels, holeAreaInVisual)
+                accept(blob, secondPass.pixels, singleInVisual)
             } else {
                 // Dark print where a ring number is expected, unless it has the solid dark core
                 // of a hole.
@@ -323,7 +369,7 @@ object ImpactDetector {
                     trace?.invoke(blob.x, blob.y, "edge")
                     continue
                 }
-                accept(blob, secondPass.pixels, holeAreaOnPaper)
+                accept(blob, secondPass.pixels, singleOnPaper)
             }
         }
         return impacts
@@ -370,7 +416,7 @@ object ImpactDetector {
 
         var count = max(1, (blob.area / singleArea).roundToInt())
         // Two overlapping holes cover less than twice the area of one, but the blob is elongated.
-        if (count == 1 && blob.elongation > 1.5f && blob.length > diameter * 1.6f) count = 2
+        if (count == 1 && blob.elongation > 1.5f && blob.length > diameter * 1.5f) count = 2
         if (count > MAX_HOLES_PER_BLOB) return "big$ratio"
 
         // Larger than one hole yet a clean disc: overlapping holes have a scalloped outline, so
@@ -467,6 +513,59 @@ object ImpactDetector {
         val across = min(dx, dy)
         if (across > 12f) return false
         return params.digitRadiiMm.any { abs(along - it) < 12f }
+    }
+
+    /**
+     * Color distance between a blob and the ring of pixels just around it.
+     *
+     * A hole stands out from what surrounds it. A piece of the edge between the card and the
+     * background, of a printed ring, of a transparent paster or of an object in front has about the
+     * color of its own surroundings: its mean color is close to the mean of the ring around it.
+     */
+    private fun surroundContrast(blob: Blob, pixels: IntArray, width: Int, height: Int, luma: FloatArray, argb: IntArray?): Float {
+        val end = blob.start + blob.area
+        var r = 0f
+        var g = 0f
+        var b = 0f
+        var reach = 0f
+        for (k in blob.start until end) {
+            val i = pixels[k]
+            r += red(argb, luma, i)
+            g += green(argb, luma, i)
+            b += blue(argb, luma, i)
+            val d = square(i % width - blob.x) + square(i / width - blob.y)
+            if (d > reach) reach = d
+        }
+        r /= blob.area
+        g /= blob.area
+        b /= blob.area
+        // Ring starting a little outside the blob, about half a blob wide.
+        val radius = sqrt(reach)
+        val inner = radius + max(2f, radius * 0.3f)
+        val outer = inner + max(3f, radius * 0.6f)
+        var rr = 0f
+        var rg = 0f
+        var rb = 0f
+        var count = 0
+        val steps = 48
+        for (s in 0 until steps) {
+            val angle = 2.0 * PI * s / steps
+            val cos = kotlin.math.cos(angle).toFloat()
+            val sin = kotlin.math.sin(angle).toFloat()
+            for (t in 0..2) {
+                val dist = inner + (outer - inner) * t / 2f
+                val x = (blob.x + cos * dist).roundToInt()
+                val y = (blob.y + sin * dist).roundToInt()
+                if (x < 0 || y < 0 || x >= width || y >= height) continue
+                val i = y * width + x
+                rr += red(argb, luma, i)
+                rg += green(argb, luma, i)
+                rb += blue(argb, luma, i)
+                count++
+            }
+        }
+        if (count == 0) return 0f
+        return sqrt(square(r - rr / count) + square(g - rg / count) + square(b - rb / count))
     }
 
     /**
@@ -681,6 +780,63 @@ object ImpactDetector {
             if (kept.none { square(cx[it] - cx[k]) + square(cy[it] - cy[k]) < mergeSq }) kept.add(k)
         }
         kept.forEach { out.add(Offset((cx[it] / width).toFloat(), (cy[it] / height).toFloat())) }
+    }
+
+    /**
+     * Pixels of the connected regions of [mask] that are at least [minArea] pixels large and reach
+     * the border of the photo, after an
+     * opening of [opening] pixels that erases thin strokes (printed rings, digits).
+     */
+    private fun largeRegions(mask: BooleanArray, width: Int, height: Int, opening: Int, minArea: Int): BooleanArray {
+        val n = width * height
+        val window = 2 * opening + 1
+        val opened = BooleanArray(n)
+        val scratch = BooleanArray(n)
+        boxPass(mask, scratch, width, height, opening, horizontal = true, required = window)
+        boxPass(scratch, opened, width, height, opening, horizontal = false, required = window)
+        boxPass(opened, scratch, width, height, opening, horizontal = true, required = 1)
+        boxPass(scratch, opened, width, height, opening, horizontal = false, required = 1)
+
+        val out = BooleanArray(n)
+        val queue = IntArray(n)
+        val seen = BooleanArray(n)
+        for (seed in 0 until n) {
+            if (!opened[seed] || seen[seed]) continue
+            var head = 0
+            var tail = 0
+            queue[tail++] = seed
+            seen[seed] = true
+            while (head < tail) {
+                val p = queue[head++]
+                val px = p % width
+                val py = p / width
+                for (ny in max(0, py - 1)..min(height - 1, py + 1)) {
+                    for (nx in max(0, px - 1)..min(width - 1, px + 1)) {
+                        val q = ny * width + nx
+                        if (opened[q] && !seen[q]) {
+                            seen[q] = true
+                            queue[tail++] = q
+                        }
+                    }
+                }
+            }
+            if (tail < minArea) continue
+            // An object held in front of the target (gun, hand) enters the photo from its border;
+            // a large region that does not reach the border is part of the target itself (glare on
+            // the ink, a sticker), not an object.
+            var touchesBorder = false
+            for (k in 0 until tail) {
+                val q = queue[k]
+                val qx = q % width
+                val qy = q / width
+                if (qx == 0 || qy == 0 || qx == width - 1 || qy == height - 1) {
+                    touchesBorder = true
+                    break
+                }
+            }
+            if (touchesBorder) for (k in 0 until tail) out[queue[k]] = true
+        }
+        return out
     }
 
     private fun dilate(source: BooleanArray, width: Int, height: Int, radius: Int): BooleanArray {

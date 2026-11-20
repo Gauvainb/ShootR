@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Android APK
+    name: Test and build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -27,28 +27,26 @@ jobs:
 
       - name: Prepare build environment
         run: |
-          # 1. Automatically accept Android SDK licenses
+          # Automatically accept Android SDK licenses
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
-          # 2. Ensure minimal .env exists so secrets plugin does not complain
-          if [ ! -f ".env" ]; then touch .env; fi
-          if [ ! -f ".env.example" ]; then touch .env.example; fi
-
-          # 3. Ensure debug.keystore exists
-          if [ ! -f "debug.keystore" ]; then
-            if [ -f "debug.keystore.base64" ]; then
-              base64 -d debug.keystore.base64 > debug.keystore
-            fi
+          # Debug keystore, when it is stored as base64 in the repository
+          if [ ! -f "debug.keystore" ] && [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
           fi
 
-          # 4. Ensure gradlew is executable
+          # Make sure the wrapper is usable
           if [ ! -f "./gradlew" ] || [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
             gradle wrapper
           fi
           chmod +x ./gradlew
 
+      # Tests run first: a failing test must block the APK.
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace --no-daemon --no-configuration-cache
+
       - name: Build APKs with Gradle
-        run: ./gradlew assembleDebug assembleRelease --stacktrace --no-daemon
+        run: ./gradlew assembleDebug assembleRelease --stacktrace --no-daemon --no-configuration-cache
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
