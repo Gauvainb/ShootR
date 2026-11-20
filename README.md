@@ -16,12 +16,13 @@ Un audit du code, avec les points à valider avant de s'y fier pour un usage en 
   - La taille d'un impact isolé est mesurée sur la photo elle-même, ce qui permet de séparer les impacts qui se chevauchent.
   - Les cordons, les chiffres imprimés, les pastilles, les mains et les objets sont écartés. Un impact qui touche un chiffre est conservé : un chiffre n'a que des traits fins, un impact a un cœur plein.
   - Les impacts détectés sont cerclés de bleu jusqu'à ce qu'on les déplace ou les modifie, et peuvent être retirés d'un coup. Le bouton « Détecter impacts » relance la recherche sans dupliquer ceux déjà placés.
-- **Score automatique** sur la cible C50, avec mouches (10X). Les flyers comptent dans le total des points mais sont exclus du groupement. Pour les autres cibles (C200, IPSC, Hunter, carabine et pistolet 10 m), il n'y a pas de points : le groupement, le MOA et le point moyen restent disponibles, en attendant des barèmes sourcés.
-- **Ajustement a posteriori** : pour chaque coup, correction des points, cordon ±1, recalage au millimètre, exclusion des « flyers », suppression.
+- **Score automatique** sur la cible C50, avec mouches (10X). Une fois le calibrage validé, le score suit les anneaux vus sur la photo et non un cercle unique : une photo prise de travers ou une feuille bombée ne décale plus les impacts d'une zone. Les flyers comptent dans le total des points mais sont exclus du groupement. Pour les autres cibles (C200, IPSC, Hunter, carabine et pistolet 10 m), il n'y a pas de points : le groupement, le MOA et le point moyen restent disponibles, en attendant des barèmes sourcés.
+- **Correction d'un coup sur la photo** : toucher un coup zoome dessus (3x au moins). On le glisse, ou on touche la photo à l'endroit du trou, ou on le décale de 1 mm avec les flèches ; ses points se mettent à jour en direct (cibles notées). On peut aussi l'exclure du groupement (« coup de doigt »), le supprimer (avec annulation) ou annuler la correction. Les coups sont listés dans un tableau compact.
 - **Télémétrie du groupement** : écart extrême (ES), hauteur, largeur, H+L, MOA et dérive du point moyen d'impact.
+- **Accueil** : un gros bouton par section, la dernière séance, et la reprise d'une séance non enregistrée. La barre du bas relie l'accueil, la séance, l'historique, le râtelier et les analyses.
 - **Historique** : recherche, filtre par distance, réouverture d'une séance pour la corriger.
-- **Évolution de la précision** : graphique du MOA par séance (courbe ou histogramme), filtrable par arme.
-- **Bibliothèque d'armes** pour pré-remplir une séance.
+- **Analyses** : graphique du MOA par séance (courbe ou histogramme), filtrable par arme.
+- **Râtelier** : armes et munitions, pour pré-remplir une séance (les munitions du calibre de l'arme passent en premier).
 
 Le repérage et la détection reposent sur une analyse d'image locale, sans modèle d'IA ni appel réseau. Leurs résultats sont des propositions à vérifier.
 
@@ -105,10 +106,11 @@ Technologies : Kotlin, Jetpack Compose (Material 3), Coil pour l'affichage des p
 Les données sont stockées dans le répertoire privé de l'application :
 
 - `sessions_history.json` : séances enregistrées, avec leurs impacts et statistiques ;
-- `weapons_library.json` : bibliothèque d'armes ;
+- `weapons_library.json` : armes du râtelier ;
+- `ammo_library.json` : munitions du râtelier ;
 - `session_photos/` : une copie de la photo de chaque séance, rangée dans le stockage privé de l'application.
 
-Au premier lancement, quelques séances et armes d'exemple sont créées. Désinstaller l'application supprime ces fichiers et les photos.
+Au premier lancement, quelques armes et munitions d'exemple sont créées (aucune séance). Désinstaller l'application supprime ces fichiers et les photos.
 
 Ces données ne sont pas incluses dans la sauvegarde Google ni dans le transfert vers un autre appareil.
 

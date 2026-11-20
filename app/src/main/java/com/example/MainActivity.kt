@@ -26,16 +26,12 @@ import com.example.ui.theme.ThemePreferences
 import com.example.ui.theme.Typography
 import com.example.ui.theme.schemeFor
 import androidx.compose.animation.core.Animatable
-
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
-
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
-
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
@@ -52,7 +48,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -73,15 +68,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.AdsClick
-import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoGraph
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CrisisAlert
@@ -89,18 +80,14 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Straighten
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -114,24 +101,19 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
-
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -193,8 +175,6 @@ import com.example.domain.TargetRecognitionEngine
 import com.example.domain.TargetSpecs
 import com.example.ui.components.CalibrationAssistantPanel
 import com.example.ui.components.CalibrationStep
-import com.example.ui.components.ChartDisplayType
-import com.example.ui.components.MoaProgressionChart
 import com.example.ui.components.SessionChartData
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -203,6 +183,22 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.hypot
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import com.example.domain.RingModel
+import com.example.ui.components.ShotTable
+import com.example.ui.components.ImpactEditPanel
+import com.example.ui.components.ActionHeight
+import com.example.ui.components.AnalysisScreen
+import com.example.ui.components.AppBottomBar
+import com.example.ui.components.ArmoryScreen
+import com.example.ui.components.HomeScreen
+import com.example.ui.components.HomeSummary
+import com.example.ui.components.LibraryPickerDialog
+import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.Dispatchers
 
 enum class AnnotationMode {
     CALIBRATE,
@@ -210,10 +206,13 @@ enum class AnnotationMode {
     IMPACT
 }
 
+/** Sections of the app, in the order of the bottom bar (home in the middle). */
 enum class AppTab {
     SHOOTING_RANGE,
     HISTORY,
-    ARMORY
+    HOME,
+    ARMORY,
+    ANALYSIS
 }
 
 data class ScreenImpact(
@@ -230,6 +229,13 @@ data class ScreenImpact(
     val fromHistory: Boolean = false
 )
 
+data class Ammo(
+    val id: Long,
+    val name: String,
+    val caliber: String,
+    val notes: String = ""
+)
+
 data class Weapon(
     val id: Long,
     val name: String,
@@ -238,6 +244,9 @@ data class Weapon(
     val optics: String = "",
     val notes: String = ""
 )
+
+/** What a ring model was measured for: it is valid only while all of these are unchanged. */
+private data class RingKey(val center: Offset?, val pxPerMm: Float, val photo: Uri?, val targetType: String)
 
 /** Pixels per millimetre used until a photo is calibrated; a placeholder, never a real scale. */
 private const val FALLBACK_PX_PER_MM = 4f
@@ -286,7 +295,7 @@ fun ShootRApp(
     val autoImpactDash = remember { PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f) }
 
     var shootingStep by remember { mutableIntStateOf(0) }
-    var currentTab by remember { mutableStateOf(AppTab.SHOOTING_RANGE) }
+    var currentTab by remember { mutableStateOf(AppTab.HOME) }
 
     var targetTypeInput by remember { mutableStateOf("C50 (25m/50m)") }
 
@@ -324,8 +333,15 @@ fun ShootRApp(
     var showWeaponsDialog by remember { mutableStateOf(false) }
     var showAddWeaponDialog by remember { mutableStateOf(false) }
 
+    // Ammunition library, next to the weapons
+    val ammoList = remember { mutableStateListOf<Ammo>() }
+    var showAmmoPicker by remember { mutableStateOf(false) }
+    var showAddAmmoDialog by remember { mutableStateOf(false) }
+    var showNewSessionConfirm by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
         weaponsList.addAll(0, LocalJsonStore.loadWeapons(context))
+        ammoList.addAll(0, LocalJsonStore.loadAmmo(context))
     }
 
     // 4. Canvas interaction state
@@ -350,6 +366,8 @@ fun ShootRApp(
     var calibrationStep by remember { mutableStateOf(CalibrationStep.SET_CENTER) }
     var calibrationEdgePx by remember { mutableStateOf<Offset?>(null) }
     var pixelPerMm by remember { mutableFloatStateOf(0f) }
+    // Rings located on the photo for one exact calibration; see currentRingModel().
+    var ringModelState by remember { mutableStateOf<Pair<RingKey, RingModel>?>(null) }
     // Width / height of the photo on screen, known once it is loaded (0 until then).
     var photoAspect by remember { mutableFloatStateOf(0f) }
     var pendingCalibration by remember { mutableStateOf<PhotoCalibration?>(null) }
@@ -396,13 +414,58 @@ fun ShootRApp(
     var showThemeDialog by remember { mutableStateOf(false) }
 
     // 5. Shot Score Adjustment (Ajustement des points a posteriori)
-    var impactUnderEdit by remember { mutableStateOf<ScreenImpact?>(null) }
-    var showImpactEditDialog by remember { mutableStateOf(false) }
+    // The impact being corrected on the zoomed target, and how it was before the correction.
+    var selectedImpactIndex by remember { mutableStateOf<Int?>(null) }
+    var selectedImpactOriginal by remember { mutableStateOf<ScreenImpact?>(null) }
+    val shootingScroll = rememberScrollState()
+    var canvasTopInColumnPx by remember { mutableFloatStateOf(0f) }
 
     // Calculate score automatically based on distance from target center
     // Points of an impact. Targets without a validated table get no points: (0, false).
     fun computeScoreForImpact(realMm: Impact, targetType: String): Pair<Int, Boolean> =
         Scoring.score(realMm, targetType) ?: Pair(0, false)
+
+    // The rings located on the photo, only while they were measured for the current photo, target
+    // type, center and scale: any change of these makes the model stale, so it is ignored.
+    fun currentRingModel(): RingModel? =
+        ringModelState?.takeIf { it.first == RingKey(targetCenterPx, pixelPerMm, selectedImageUri, targetTypeInput) }?.second
+
+    // Position in mm on the target of a point of the canvas, and its score. With the rings located
+    // on the photo, distances follow them, so a tilted photo or a curved sheet does not shift the
+    // zones; otherwise the single scale of the calibration is used.
+    fun locate(point: Offset): Pair<Impact, Pair<Int, Boolean>> {
+        val model = currentRingModel()
+        val realMm = if (model != null) {
+            val aspect = model.imageWidth.toFloat() / model.imageHeight
+            val mm = model.toTargetMm(ImageFit.toImage(point, canvasWidthPx, canvasHeightPx, aspect))
+            Impact(mm.x, mm.y)
+        } else {
+            val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
+            val pxMm = if (pixelPerMm > 0f) pixelPerMm else FALLBACK_PX_PER_MM
+            Impact((point.x - center.x) / pxMm, (center.y - point.y) / pxMm)
+        }
+        return Pair(realMm, computeScoreForImpact(realMm, targetTypeInput))
+    }
+
+    // Locates the rings on the photo for the current calibration (no-op when already done or when
+    // there is no photo, scale or visual to measure from).
+    suspend fun ensureRingModel() {
+        val uri = selectedImageUri ?: return
+        val center = targetCenterPx ?: return
+        if (currentRingModel() != null || photoAspect <= 0f || pixelPerMm <= 0f) return
+        val visualRadiusMm = (TargetSpecs.forTargetType(targetTypeInput)?.blackVisualDiameterMm ?: 0f) / 2f
+        if (visualRadiusMm <= 0f) return
+        val key = RingKey(center, pixelPerMm, uri, targetTypeInput)
+        val shownWidth = ImageFit.displayedWidth(canvasWidthPx, canvasHeightPx, photoAspect)
+        val model = TargetRecognitionEngine.buildRingModel(
+            context, uri,
+            centerNormalized = ImageFit.toImage(center, canvasWidthPx, canvasHeightPx, photoAspect),
+            visualRadiusNormalized = visualRadiusMm * key.pxPerMm / shownWidth,
+            visualRadiusMm = visualRadiusMm,
+            targetType = targetTypeInput
+        ) ?: return
+        ringModelState = key to model
+    }
 
     // 6. History & Stats Sheet state
     var savedSessionsList by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
@@ -410,12 +473,9 @@ fun ShootRApp(
     var historyDistanceFilter by remember { mutableStateOf("Toutes") }
     var historyWeaponFilter by remember { mutableStateOf("Toutes") }
 
-    var showChartDialog by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var weaponPendingDeletion by remember { mutableStateOf<Weapon?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
-    var chartWeaponFilter by remember { mutableStateOf("Toutes") }
-    var chartDisplayType by remember { mutableStateOf(ChartDisplayType.LINE) }
 
     // The in-memory list is the source of truth; the file is read once and written in the background.
     var historyLoaded by remember { mutableStateOf(false) }
@@ -459,9 +519,8 @@ fun ShootRApp(
                 val (sc, inner) = computeScoreForImpact(imp.realMm, targetTypeInput)
                 impactsList[i] = imp.copy(canvasOffset = canvas, score = sc, isInnerTen = inner, fromHistory = false)
             } else {
-                val realMm = Impact((imp.canvasOffset.x - center.x) / pxMm, (center.y - imp.canvasOffset.y) / pxMm)
-                val (sc, inner) = computeScoreForImpact(realMm, targetTypeInput)
-                impactsList[i] = imp.copy(realMm = realMm, score = sc, isInnerTen = inner)
+                val (realMm, scorePair) = locate(imp.canvasOffset)
+                impactsList[i] = imp.copy(realMm = realMm, score = scorePair.first, isInnerTen = scorePair.second)
             }
         }
     }
@@ -544,7 +603,9 @@ fun ShootRApp(
             return
         }
         isDetectingImpacts = true
-        coroutineScope.launch {
+        // Resume on the main thread after the background work: the code below shows toasts and
+        // changes UI state.
+        coroutineScope.launch(Dispatchers.Main.immediate) {
             try {
                 val targetRes = detectedTargetResult
                     ?: TargetRecognitionEngine.analyzeImage(context, imageUri, targetTypeInput, visualDiameterMm())
@@ -583,18 +644,18 @@ fun ShootRApp(
 
                 val detected = TargetRecognitionEngine.detectImpacts(context, imageUri, params)
                     .map { ImageFit.toCanvas(it, canvasWidthPx, canvasHeightPx, aspect) }
+                ensureRingModel()
                 // The photo was changed while detecting: these holes belong to the previous one.
                 if (selectedImageUri != imageUri) return@launch
 
                 // Impacts already on the canvas are kept as they are: only new holes are added.
-                val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
                 val pxMm = if (pixelPerMm > 0f) pixelPerMm else FALLBACK_PX_PER_MM
                 val minGapPx = maxOf(10f, (caliberMm ?: 0f) * pxMm * 0.5f)
                 val newPoints = ImpactDetector.excludeKnown(impactsList.map { it.canvasOffset }, detected, minGapPx)
 
                 newPoints.forEach { canvasOffset ->
-                    val realImp = Impact((canvasOffset.x - center.x) / pxMm, (center.y - canvasOffset.y) / pxMm)
-                    val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+                    val (realImp, scorePair) = locate(canvasOffset)
+                    val (sc, inner) = scorePair
                     impactsList.add(
                         ScreenImpact(
                             index = impactsList.size + 1,
@@ -645,6 +706,15 @@ fun ShootRApp(
         if (impactsList.isEmpty()) detectImpactsOnPhoto()
     }
 
+    // At the impacts step the calibration is frozen: locate the rings once, then rescore what is
+    // already placed against them.
+    LaunchedEffect(shootingStep, targetCenterPx, pixelPerMm, selectedImageUri, targetTypeInput, photoAspect) {
+        if (shootingStep < 3 || !isCalibrationValidated()) return@LaunchedEffect
+        ensureRingModel()
+        val center = targetCenterPx
+        if (currentRingModel() != null && center != null) recomputeImpacts(center, pixelPerMm)
+    }
+
     // The step decides the mode: impacts at step 4, calibration at step 3.
     LaunchedEffect(shootingStep) {
         if (shootingStep == 3) activeMode = AnnotationMode.IMPACT
@@ -655,7 +725,7 @@ fun ShootRApp(
     fun analyzeSelectedPhoto() {
         val uri = selectedImageUri ?: return
         isAnalyzingTarget = true
-        coroutineScope.launch {
+        coroutineScope.launch(Dispatchers.Main.immediate) {
             try {
                 val result = TargetRecognitionEngine.analyzeImage(context, uri, targetTypeInput, visualDiameterMm())
                 if (selectedImageUri == uri) {
@@ -680,6 +750,70 @@ fun ShootRApp(
         }
     }
 
+    // Zooms the target so that a point of it (target coordinates) sits in the middle of the view.
+    fun zoomOn(point: Offset, zoom: Float) {
+        scale = zoom
+        offset = Offset(canvasWidthPx / 2f - point.x * zoom, canvasHeightPx / 2f - point.y * zoom)
+    }
+
+    // Puts an impact at a point of the target; its score follows from where it now is.
+    fun moveImpact(idx: Int, point: Offset) {
+        if (idx !in impactsList.indices) return
+        val (realMm, scorePair) = locate(point)
+        impactsList[idx] = impactsList[idx].copy(
+            isAuto = false,
+            canvasOffset = point,
+            realMm = realMm,
+            score = scorePair.first,
+            isInnerTen = scorePair.second
+        )
+    }
+
+    // Starts correcting an impact on the target: zoom on it, so that its hole is visible.
+    fun selectImpact(idx: Int) {
+        if (idx !in impactsList.indices) return
+        selectedImpactIndex = idx
+        selectedImpactOriginal = impactsList[idx]
+        zoomOn(impactsList[idx].canvasOffset, maxOf(scale, 3f))
+    }
+
+    // Ends the correction, keeping the changes or restoring the impact as it was.
+    fun endImpactEdit(keep: Boolean) {
+        val idx = selectedImpactIndex
+        val original = selectedImpactOriginal
+        if (!keep && idx != null && original != null && idx in impactsList.indices) impactsList[idx] = original
+        selectedImpactIndex = null
+        selectedImpactOriginal = null
+        scale = 1f
+        offset = Offset.Zero
+    }
+
+    // Leaving the impacts step ends a correction in progress.
+    LaunchedEffect(shootingStep) {
+        if (shootingStep != 3 && selectedImpactIndex != null) endImpactEdit(keep = true)
+    }
+
+    // Removes an impact, renumbers the others, and offers to undo from the snackbar.
+    fun deleteImpact(idx: Int) {
+        if (idx !in impactsList.indices) return
+        val before = impactsList.toList()
+        val removedNumber = before[idx].index
+        val reindexed = before.filterIndexed { i, _ -> i != idx }.mapIndexed { i, s -> s.copy(index = i + 1) }
+        impactsList.clear()
+        impactsList.addAll(reindexed)
+        coroutineScope.launch {
+            val result = snackbarHostState.showSnackbar(
+                message = "Coup #$removedNumber supprimé",
+                actionLabel = "Annuler",
+                duration = SnackbarDuration.Long
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                impactsList.clear()
+                impactsList.addAll(before)
+            }
+        }
+    }
+
     // Function to load a past session into the active editor
     fun loadSessionForRetroactiveAdjustment(sessionObj: JSONObject) {
         try {
@@ -693,6 +827,7 @@ fun ShootRApp(
             notesInput = sessionObj.optString("notes", "")
 
             val imgUriStr = sessionObj.optString("imageUri", "")
+            endImpactEdit(keep = true)
             selectedImageUri = if (imgUriStr.isNotBlank()) Uri.parse(imgUriStr) else null
             // What is on screen belongs to another photo; the session's own calibration, when it was
             // saved, is restored once the canvas size is known.
@@ -755,7 +890,7 @@ fun ShootRApp(
 
     // Save or Update Session in JSON
     // Writes the session to the history. The photo must already be in private storage.
-    fun persistSession(imageUri: String) {
+    fun persistSession(imageUri: String): Boolean {
         try {
             val currentList = savedSessionsList.toMutableList()
 
@@ -823,10 +958,28 @@ fun ShootRApp(
             }
 
             saveHistory(currentList)
+            return true
         } catch (e: Exception) {
             Toast.makeText(context, "Erreur : ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            return false
         }
     }
+
+    // A blank session, keeping the weapon and ammunition settings of the previous one.
+    fun startNewSession() {
+        endImpactEdit(keep = true)
+        editingSessionId = null
+        impactsList.clear()
+        selectedImageUri = null
+        resetPhotoAnalysis()
+        shootingStep = 0
+        activeMode = AnnotationMode.IMPACT
+        sessionTitleInput = "Séance de tir"
+        notesInput = ""
+    }
+
+    // Something worth keeping is on the shooting screen.
+    val sessionInProgress = editingSessionId != null || impactsList.isNotEmpty() || selectedImageUri != null
 
     fun saveSession() {
         if (impactsList.isEmpty()) {
@@ -848,7 +1001,13 @@ fun ShootRApp(
                 Toast.makeText(context, "Photo non copiée : la séance est enregistrée sans image.", Toast.LENGTH_LONG).show()
             }
             if (photo != null) selectedImageUri = photo
-            persistSession(photo?.toString() ?: "")
+            if (persistSession(photo?.toString() ?: "")) {
+                // The saved session is now in the history: show it there, and start the next one blank.
+                startNewSession()
+                historySearchQuery = ""
+                historyDistanceFilter = "Toutes"
+                currentTab = AppTab.HISTORY
+            }
         }
     }
 
@@ -938,222 +1097,6 @@ fun ShootRApp(
         )
     }
 
-    // DIALOG: Ajustement des points a posteriori pour un coup spécifique
-    if (showImpactEditDialog && impactUnderEdit != null) {
-        val shot = impactUnderEdit!!
-        var currentScore by remember(shot) { mutableIntStateOf(shot.score) }
-        var isInnerTen by remember(shot) { mutableStateOf(shot.isInnerTen) }
-        var isFlyer by remember(shot) { mutableStateOf(shot.isFlyer) }
-        var deltaXMm by remember(shot) { mutableFloatStateOf(shot.realMm.xMm) }
-        var deltaYMm by remember(shot) { mutableFloatStateOf(shot.realMm.yMm) }
-
-        AlertDialog(
-            onDismissRequest = { showImpactEditDialog = false },
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Ajuster le coup #${shot.index}", fontWeight = FontWeight.Bold)
-                    }
-                    Surface(
-                        shape = CircleShape,
-                        color = if (isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.primary
-                    ) {
-                        Text(
-                            text = if (isInnerTen) "10X" else "$currentScore pts",
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Black,
-                            color = Color.White
-                        )
-                    }
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "Ajustez rétroactivement la position de l'impact et, si la cible est notée, ses points :",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (scoringEnabled) {
-                        // 1. Score Buttons Grid
-                        Text("Attribution des points :", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            // Mouche 10X
-                            FilterChip(
-                                selected = currentScore == 10 && isInnerTen,
-                                onClick = { currentScore = 10; isInnerTen = true },
-                                label = { Text("10X (Mouche)", fontWeight = FontWeight.Bold) },
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF10B981).copy(alpha = 0.3f), selectedLabelColor = Color(0xFF10B981))
-                            )
-                            // Standard numbers 10 to 0
-                            (10 downTo 0).forEach { sc ->
-                                FilterChip(
-                                    selected = currentScore == sc && !isInnerTen,
-                                    onClick = { currentScore = sc; isInnerTen = false },
-                                    label = { Text(if (sc == 0) "0 (Paille)" else "$sc") }
-                                )
-                            }
-                        }
-    
-                        // 2. Cordon touché Quick Buttons
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    if (currentScore < 10) currentScore += 1
-                                    Toast.makeText(context, "Cordon favorable (+1 pt)", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text("+1 Cordon", fontSize = 12.sp)
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    if (currentScore > 0) currentScore -= 1
-                                    Toast.makeText(context, "Cordon défavorable (-1 pt)", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Text("-1 Cordon", fontSize = 12.sp)
-                            }
-                        }
-    
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    // 3. Nudge fine position (Recalage millimétrique)
-                    Text(
-                        text = "Recalage fin de la position (ΔX=${String.format(Locale.US, "%.1f", deltaXMm)} mm, ΔY=${String.format(Locale.US, "%.1f", deltaYMm)} mm) :",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { deltaXMm -= 1f }) {
-                            Icon(imageVector = Icons.Default.Navigation, contentDescription = "Gauche", modifier = Modifier.graphicsLayer { rotationZ = -90f })
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            IconButton(onClick = { deltaYMm += 1f }) {
-                                Icon(imageVector = Icons.Default.ArrowUpward, contentDescription = "Haut")
-                            }
-                            Text("1 mm", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            IconButton(onClick = { deltaYMm -= 1f }) {
-                                Icon(imageVector = Icons.Default.ArrowDownward, contentDescription = "Bas")
-                            }
-                        }
-                        IconButton(onClick = { deltaXMm += 1f }) {
-                            Icon(imageVector = Icons.Default.Navigation, contentDescription = "Droite", modifier = Modifier.graphicsLayer { rotationZ = 90f })
-                        }
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                    // 4. Flyer / Coup de doigt exclusion
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Coup de doigt (Flyer)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                            Text("Exclure de la dispersion MOA du groupement", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = isFlyer,
-                            onCheckedChange = { isFlyer = it }
-                        )
-                    }
-
-                    // 5. Delete specific shot
-                    OutlinedButton(
-                        onClick = {
-                            val idx = impactsList.indexOfFirst { it.index == shot.index }
-                            if (idx >= 0) {
-                                // Keep a copy so that the deletion can be undone from the snackbar.
-                                val before = impactsList.toList()
-                                val reindexed = before.filterIndexed { i, _ -> i != idx }
-                                    .mapIndexed { i, s -> s.copy(index = i + 1) }
-                                impactsList.clear()
-                                impactsList.addAll(reindexed)
-                                val removedNumber = shot.index
-                                coroutineScope.launch {
-                                    val result = snackbarHostState.showSnackbar(
-                                        message = "Coup #$removedNumber supprimé",
-                                        actionLabel = "Annuler",
-                                        duration = SnackbarDuration.Long
-                                    )
-                                    if (result == SnackbarResult.ActionPerformed) {
-                                        impactsList.clear()
-                                        impactsList.addAll(before)
-                                    }
-                                }
-                            }
-                            showImpactEditDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Supprimer cet impact")
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val idx = impactsList.indexOfFirst { it.index == shot.index }
-                        if (idx >= 0) {
-                            val pxMm = if (pixelPerMm > 0f) pixelPerMm else FALLBACK_PX_PER_MM
-                            val center = targetCenterPx ?: Offset(500f, 500f)
-                            val newCanvasOffset = Offset(center.x + deltaXMm * pxMm, center.y - deltaYMm * pxMm)
-
-                            impactsList[idx] = shot.copy(
-                                isAuto = false,
-                                score = currentScore,
-                                isInnerTen = isInnerTen,
-                                isFlyer = isFlyer,
-                                realMm = Impact(deltaXMm, deltaYMm),
-                                canvasOffset = newCanvasOffset
-                            )
-                            Toast.makeText(context, "Coup #${shot.index} ajusté ($currentScore pts) !", Toast.LENGTH_SHORT).show()
-                        }
-                        showImpactEditDialog = false
-                    }
-                ) {
-                    Text("Valider l'ajustement")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showImpactEditDialog = false }) {
-                    Text("Annuler")
-                }
-            }
-        )
-    }
-
     // DIALOG: Confirmation avant de supprimer tout l'historique (irréversible)
     if (showClearHistoryDialog) {
         val count = savedSessionsList.size
@@ -1230,100 +1173,6 @@ fun ShootRApp(
         )
     }
 
-    // DIALOG: Graphique d'évolution MOA
-    if (showChartDialog) {
-        val historyList = remember(savedSessionsList) { savedSessionsList }
-        val chartDataList = remember(historyList) {
-            historyList.map { obj ->
-                SessionChartData(
-                    id = obj.optLong("id", 0L),
-                    date = obj.optString("date", ""),
-                    weapon = obj.optString("weapon", "Arme"),
-                    caliber = obj.optString("caliber", ""),
-                    ammo = obj.optString("ammo", ""),
-                    distanceMeters = obj.optDouble("distanceMeters", 25.0).toFloat(),
-                    moa = obj.optDouble("moa", 0.0).toFloat(),
-                    esMm = obj.optDouble("esMm", 0.0).toFloat(),
-                    shotsCount = obj.optInt("shotsCount", 0)
-                )
-            }
-        }
-
-        val availableWeapons = remember(chartDataList) {
-            listOf("Toutes") + chartDataList.map { it.weapon }.distinct()
-        }
-
-        AlertDialog(
-            onDismissRequest = { showChartDialog = false },
-            containerColor = MaterialTheme.colorScheme.surface,
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.AutoGraph, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Évolution de la précision (MOA)", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                    }
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Type de vue :", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            FilterChip(
-                                selected = chartDisplayType == ChartDisplayType.LINE,
-                                onClick = { chartDisplayType = ChartDisplayType.LINE },
-                                label = { Text("Courbe", fontSize = 12.sp) },
-                                leadingIcon = { Icon(imageVector = Icons.Default.ShowChart, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                            )
-                            FilterChip(
-                                selected = chartDisplayType == ChartDisplayType.HISTOGRAM,
-                                onClick = { chartDisplayType = ChartDisplayType.HISTOGRAM },
-                                label = { Text("Histogramme", fontSize = 12.sp) },
-                                leadingIcon = { Icon(imageVector = Icons.Default.BarChart, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                            )
-                        }
-                    }
-
-                    Text("Filtrer par arme :", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(availableWeapons) { w ->
-                            FilterChip(
-                                selected = chartWeaponFilter == w,
-                                onClick = { chartWeaponFilter = w },
-                                label = { Text(w, fontSize = 12.sp) }
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    MoaProgressionChart(
-                        sessions = chartDataList,
-                        selectedWeapon = chartWeaponFilter,
-                        chartType = chartDisplayType
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = { showChartDialog = false }) {
-                    Text("Fermer")
-                }
-            }
-        )
-    }
-
     // DIALOG: choix du thème (sombre, clair, tactique), gardé entre deux lancements
     if (showThemeDialog) {
         AlertDialog(
@@ -1372,6 +1221,11 @@ fun ShootRApp(
         )
     }
 
+    // Back goes home from any section.
+    BackHandler(enabled = currentTab != AppTab.HOME) {
+        currentTab = AppTab.HOME
+    }
+
     // MAIN SCAFFOLD WITH BOTTOM NAVIGATION
     Scaffold(
         topBar = {
@@ -1395,40 +1249,15 @@ fun ShootRApp(
                     IconButton(onClick = { showThemeDialog = true }) {
                         Icon(imageVector = Icons.Default.Palette, contentDescription = "Changer de thème", tint = MaterialTheme.colorScheme.onSurface)
                     }
-                    IconButton(onClick = { showChartDialog = true }) {
-                        Icon(imageVector = Icons.Default.AutoGraph, contentDescription = "Graphique MOA", tint = MaterialTheme.colorScheme.secondary)
-                    }
-                    IconButton(onClick = { showWeaponsDialog = true }) {
-                        Icon(imageVector = Icons.Default.Shield, contentDescription = "Coffre d'armes", tint = MaterialTheme.colorScheme.onSurface)
-                    }
                 }
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                NavigationBarItem(
-                    selected = currentTab == AppTab.SHOOTING_RANGE,
-                    onClick = { currentTab = AppTab.SHOOTING_RANGE },
-                    icon = { Icon(imageVector = Icons.Default.AdsClick, contentDescription = "Pas de tir") },
-                    label = { Text("Pas de tir") }
-                )
-                NavigationBarItem(
-                    selected = currentTab == AppTab.HISTORY,
-                    onClick = { currentTab = AppTab.HISTORY },
-                    icon = {
-                        BadgedBox(
-                            badge = {
-                                if (savedSessionsList.isNotEmpty()) {
-                                    Badge { Text("${savedSessionsList.size}") }
-                                }
-                            }
-                        ) {
-                            Icon(imageVector = Icons.Default.History, contentDescription = "Historique")
-                        }
-                    },
-                    label = { Text("Historique") }
-                )
-            }
+            AppBottomBar(
+                current = currentTab.ordinal,
+                onSelect = { currentTab = AppTab.entries[it] },
+                historyBadge = savedSessionsList.size
+            )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background
@@ -1447,7 +1276,7 @@ fun ShootRApp(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(innerPadding)
-                            .verticalScroll(rememberScrollState())
+                            .verticalScroll(shootingScroll)
                             .padding(horizontal = 14.dp, vertical = 6.dp)
                             .testTag("shooting_range_container"),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1530,14 +1359,27 @@ fun ShootRApp(
                                         color = MaterialTheme.colorScheme.primary
                                     )
 
-                                    OutlinedButton(
-                                        onClick = { showWeaponsDialog = true },
-                                        contentPadding = ButtonDefaults.TextButtonContentPadding,
-                                        shape = RoundedCornerShape(8.dp)
-                                    ) {
-                                        Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.secondary)
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Armes (${weaponsList.size})", fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        OutlinedButton(
+                                            onClick = { showWeaponsDialog = true },
+                                            contentPadding = ButtonDefaults.TextButtonContentPadding,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.testTag("pick_weapon_button")
+                                        ) {
+                                            Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.secondary)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Armes (${weaponsList.size})", fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { showAmmoPicker = true },
+                                            contentPadding = ButtonDefaults.TextButtonContentPadding,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.testTag("pick_ammo_button")
+                                        ) {
+                                            Icon(imageVector = Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.secondary)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Munitions (${ammoList.size})", fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
+                                        }
                                     }
                                 }
 
@@ -1648,7 +1490,7 @@ fun ShootRApp(
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Button(
                                     onClick = { photoPickerLauncher.launch("image/*") },
-                                    modifier = Modifier.height(44.dp).testTag("load_photo_button"),
+                                    modifier = Modifier.height(ActionHeight).testTag("load_photo_button"),
                                     shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                                 ) {
@@ -1867,14 +1709,14 @@ fun ShootRApp(
                                                 draggedImpactIndex = tappedImpactIdx
                                                 draggedImpactIndexState = tappedImpactIdx
                                                 activeDragTarget = "EXISTING_IMPACT"
+                                            } else if (selectedImpactIndex != null) {
+                                                // Correcting an impact: touching the photo puts it there.
+                                                draggedImpactIndex = selectedImpactIndex
+                                                draggedImpactIndexState = selectedImpactIndex
+                                                activeDragTarget = "MOVE_SELECTED"
                                             } else {
                                                 activeDragTarget = "NEW_IMPACT"
-                                                val center = currentCenter
-                                                val pxMm = if (pixelPerMm > 0f) pixelPerMm else FALLBACK_PX_PER_MM
-                                                val xMm = (initialLocalPoint.x - center.x) / pxMm
-                                                val yMm = (center.y - initialLocalPoint.y) / pxMm
-                                                val realImp = Impact(xMm, yMm)
-                                                val scorePair = computeScoreForImpact(realImp, targetTypeInput)
+                                                val scorePair = locate(initialLocalPoint).second
                                                 pendingImpactOffset = initialLocalPoint
                                                 pendingImpactScore = scorePair
                                             }
@@ -1967,19 +1809,18 @@ fun ShootRApp(
                                                         change.consume()
                                                     }
                                                     AnnotationMode.IMPACT -> {
-                                                        val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
-                                                        val pxMm = if (pixelPerMm > 0f) pixelPerMm else FALLBACK_PX_PER_MM
-                                                        val xMm = (currentLocalPoint.x - center.x) / pxMm
-                                                        val yMm = (center.y - currentLocalPoint.y) / pxMm
-                                                        val realImp = Impact(xMm, yMm)
-                                                        val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+                                                        val (realImp, scorePair) = locate(currentLocalPoint)
+                                                        val (sc, inner) = scorePair
+                                                        val xMm = realImp.xMm
+                                                        val yMm = realImp.yMm
                                                         val scoreLabel = if (inner) "10 Mouche" else "$sc pts"
 
-                                                        if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
+                                                        if ((activeDragTarget == "EXISTING_IMPACT" || activeDragTarget == "MOVE_SELECTED") && draggedImpactIndex != null) {
                                                             val idx = draggedImpactIndex!!
                                                             // Below the tap threshold the finger only jitters: the impact
-                                                            // stays where it is and, if detected, stays unconfirmed.
-                                                            if (moveDist >= TAP_SLOP_PX) {
+                                                            // stays where it is and, if detected, stays unconfirmed. The
+                                                            // impact under correction follows the finger at once.
+                                                            if (activeDragTarget == "MOVE_SELECTED" || moveDist >= TAP_SLOP_PX) {
                                                                 impactsList[idx] = impactsList[idx].copy(
                                                                     isAuto = false,
                                                                     canvasOffset = currentLocalPoint,
@@ -2034,19 +1875,17 @@ fun ShootRApp(
                                                     targetCenterPx = upLocalPoint
                                                 }
                                                 AnnotationMode.IMPACT -> {
-                                                    val center = targetCenterPx ?: Offset(canvasWidthPx / 2f, canvasHeightPx / 2f)
-                                                    val pxMm = if (pixelPerMm > 0f) pixelPerMm else FALLBACK_PX_PER_MM
-                                                    val xMm = (upLocalPoint.x - center.x) / pxMm
-                                                    val yMm = (center.y - upLocalPoint.y) / pxMm
-                                                    val realImp = Impact(xMm, yMm)
-                                                    val (sc, inner) = computeScoreForImpact(realImp, targetTypeInput)
+                                                    val (realImp, scorePair) = locate(upLocalPoint)
+                                                    val (sc, inner) = scorePair
 
-                                                    if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
+                                                    if (activeDragTarget == "MOVE_SELECTED" && draggedImpactIndex != null) {
+                                                        // Touch or drag on the photo: the corrected impact goes there.
+                                                        moveImpact(draggedImpactIndex!!, upLocalPoint)
+                                                    } else if (activeDragTarget == "EXISTING_IMPACT" && draggedImpactIndex != null) {
                                                         val idx = draggedImpactIndex!!
                                                         if (totalMove < TAP_SLOP_PX) {
-                                                            // Tap court sans déplacement : ouvre le dialogue d'ajustement
-                                                            impactUnderEdit = impactsList[idx]
-                                                            showImpactEditDialog = true
+                                                            // Tap court sans déplacement : corriger ce coup sur la cible
+                                                            if (selectedImpactIndex != idx) selectImpact(idx)
                                                         } else {
                                                             // Déplacement finalisé par glissement
                                                             impactsList[idx] = impactsList[idx].copy(
@@ -2080,6 +1919,7 @@ fun ShootRApp(
                                     }
                                 }
                                 .testTag("target_photo_canvas")
+                                .onGloballyPositioned { canvasTopInColumnPx = it.positionInParent().y }
                         ) {
                             val currentWidthPx = constraints.maxWidth.toFloat()
                             val currentHeightPx = constraints.maxHeight.toFloat()
@@ -2136,15 +1976,18 @@ fun ShootRApp(
 
                                 Canvas(modifier = Modifier.fillMaxSize()) {
                                     val center = targetCenterPx ?: Offset(size.width / 2f, size.height / 2f)
+                                    // Overlay sizes in dp, so that markers keep the same physical size on every screen,
+                                    // divided by the zoom so that they also keep their size on screen when zooming in.
+                                    val k = 0.75f * density / scale
 
                                     // Centre de la cible (croix et réticule vert)
-                                    val r = 18f
-                                    drawCircle(color = Color(0xFF10B981).copy(alpha = 0.35f), radius = r + 6f, center = center)
-                                    drawCircle(color = Color(0xFF10B981), radius = r, center = center, style = Stroke(width = 2.5f))
-                                    drawCircle(color = Color(0xFF10B981), radius = 3.5f, center = center)
-                                    val arm = 28f
-                                    drawLine(color = Color(0xFF10B981), start = Offset(center.x - arm, center.y), end = Offset(center.x + arm, center.y), strokeWidth = 2.2f)
-                                    drawLine(color = Color(0xFF10B981), start = Offset(center.x, center.y - arm), end = Offset(center.x, center.y + arm), strokeWidth = 2.2f)
+                                    val r = 18f * k
+                                    drawCircle(color = Color(0xFF10B981).copy(alpha = 0.35f), radius = r + 6f * k, center = center)
+                                    drawCircle(color = Color(0xFF10B981), radius = r, center = center, style = Stroke(width = 2.5f * k))
+                                    drawCircle(color = Color(0xFF10B981), radius = 3.5f * k, center = center)
+                                    val arm = 28f * k
+                                    drawLine(color = Color(0xFF10B981), start = Offset(center.x - arm, center.y), end = Offset(center.x + arm, center.y), strokeWidth = 2.2f * k)
+                                    drawLine(color = Color(0xFF10B981), start = Offset(center.x, center.y - arm), end = Offset(center.x, center.y + arm), strokeWidth = 2.2f * k)
 
                                     // Anneau d'étalonnage du visuel cible
                                     if (pixelPerMm > 0f) {
@@ -2161,36 +2004,39 @@ fun ShootRApp(
                                                 color = Color(0xFFFBBF24),
                                                 radius = visualRadiusPx,
                                                 center = center,
-                                                style = Stroke(width = 3f, pathEffect = calibrationRingDash)
+                                                style = Stroke(width = 3f * k, pathEffect = calibrationRingDash)
                                             )
 
                                             // Poignée d'ajustement sur le bord du visuel
                                             val edgePoint = calibrationEdgePx ?: Offset(center.x + visualRadiusPx, center.y)
-                                            drawCircle(color = Color(0xFFFBBF24).copy(alpha = 0.4f), radius = 14f, center = edgePoint)
-                                            drawCircle(color = Color(0xFFFBBF24), radius = 7f, center = edgePoint)
-                                            drawCircle(color = Color.White, radius = 7f, center = edgePoint, style = Stroke(width = 2f))
+                                            drawCircle(color = Color(0xFFFBBF24).copy(alpha = 0.4f), radius = 14f * k, center = edgePoint)
+                                            drawCircle(color = Color(0xFFFBBF24), radius = 7f * k, center = edgePoint)
+                                            drawCircle(color = Color.White, radius = 7f * k, center = edgePoint, style = Stroke(width = 2f * k))
 
                                             drawLine(
                                                 color = Color(0xFFFBBF24).copy(alpha = 0.85f),
                                                 start = center,
                                                 end = edgePoint,
-                                                strokeWidth = 2f,
+                                                strokeWidth = 2f * k,
                                                 pathEffect = calibrationRadiusDash
                                             )
 
                                             val label = "${selectedCalibrationRef.diameterMm.toInt()} mm (${selectedCalibrationRef.shortName})"
                                             val textLayout = textMeasurer.measure(label, style = calibrationLabelStyle)
-                                            drawText(
-                                                textLayoutResult = textLayout,
-                                                topLeft = Offset(center.x - textLayout.size.width / 2f, center.y - visualRadiusPx - textLayout.size.height - 6f)
-                                            )
+                                            val labelAnchor = Offset(center.x, center.y - visualRadiusPx - 6f * k)
+                                            withTransform({ scale(1f / scale, 1f / scale, pivot = labelAnchor) }) {
+                                                drawText(
+                                                    textLayoutResult = textLayout,
+                                                    topLeft = Offset(labelAnchor.x - textLayout.size.width / 2f, labelAnchor.y - textLayout.size.height)
+                                                )
+                                            }
                                         } else {
                                             // Anneau discret en mode tir
                                             drawCircle(
                                                 color = Color(0xFFFBBF24).copy(alpha = 0.35f),
                                                 radius = visualRadiusPx,
                                                 center = center,
-                                                style = Stroke(width = 1.5f)
+                                                style = Stroke(width = 1.5f * k)
                                             )
                                         }
                                     }
@@ -2214,33 +2060,53 @@ fun ShootRApp(
 
                                         drawCircle(
                                             color = Color(0xFF38BDF8).copy(alpha = 0.65f),
-                                            radius = maxRadius + 8f,
+                                            radius = maxRadius + 8f * k,
                                             center = mpiPos,
-                                            style = Stroke(width = 2f, pathEffect = groupCircleDash)
+                                            style = Stroke(width = 2f * k, pathEffect = groupCircleDash)
                                         )
 
-                                        val mpiArm = 18f
-                                        drawCircle(color = Color(0xFF0284C7), radius = 4f, center = mpiPos)
-                                        drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x - mpiArm, mpiPos.y), end = Offset(mpiPos.x + mpiArm, mpiPos.y), strokeWidth = 2.5f)
-                                        drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x, mpiPos.y - mpiArm), end = Offset(mpiPos.x, mpiPos.y + mpiArm), strokeWidth = 2.5f)
+                                        val mpiArm = 18f * k
+                                        drawCircle(color = Color(0xFF0284C7), radius = 4f * k, center = mpiPos)
+                                        drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x - mpiArm, mpiPos.y), end = Offset(mpiPos.x + mpiArm, mpiPos.y), strokeWidth = 2.5f * k)
+                                        drawLine(color = Color(0xFF38BDF8), start = Offset(mpiPos.x, mpiPos.y - mpiArm), end = Offset(mpiPos.x, mpiPos.y + mpiArm), strokeWidth = 2.5f * k)
                                     }
 
                                     // Dessin des impacts avec numérotation
-                                    val radius = 13f
+                                    val radius = 13f * k
+                                    val editing = selectedImpactIndex
                                     impactsList.forEachIndexed { idx, imp ->
                                         val pos = imp.canvasOffset
                                         val isLatest = idx == impactsList.lastIndex
                                         val isBeingDragged = draggedImpactIndexState == idx
 
+                                        if (idx == editing) {
+                                            // Being corrected: a thin ring and a cross with an open middle, so the
+                                            // hole on the photo stays visible right where the impact is.
+                                            val ring = Color(0xFF22D3EE)
+                                            drawCircle(color = Color.Black.copy(alpha = 0.6f), radius = radius * 1.6f, center = pos, style = Stroke(width = 3.5f * k))
+                                            drawCircle(color = ring, radius = radius * 1.6f, center = pos, style = Stroke(width = 2f * k))
+                                            val gap = radius * 0.45f
+                                            val crossArm = radius * 2.6f
+                                            listOf(Offset(1f, 0f), Offset(-1f, 0f), Offset(0f, 1f), Offset(0f, -1f)).forEach { d ->
+                                                val from = pos + d * gap
+                                                val to = pos + d * crossArm
+                                                drawLine(color = Color.Black.copy(alpha = 0.6f), start = from, end = to, strokeWidth = 3.5f * k)
+                                                drawLine(color = ring, start = from, end = to, strokeWidth = 1.6f * k)
+                                            }
+                                            return@forEachIndexed
+                                        }
+                                        // While one impact is corrected, the others fade out of the way.
+                                        val fade = if (editing != null) 0.45f else 1f
+
                                         if (isBeingDragged) {
                                             // Réticule et halo d'ajustement en temps réel pour l'impact déplacé
-                                            val arm = 24f
-                                            drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f, center = pos)
-                                            drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f)
-                                            drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f)
+                                            val dragArm = 24f * k
+                                            drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f * k, center = pos)
+                                            drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - dragArm, pos.y), end = Offset(pos.x + dragArm, pos.y), strokeWidth = 2f * k)
+                                            drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - dragArm), end = Offset(pos.x, pos.y + dragArm), strokeWidth = 2f * k)
                                         }
 
-                                        drawCircle(color = Color.Black.copy(alpha = 0.5f), radius = radius + 2f, center = Offset(pos.x + 1f, pos.y + 1f))
+                                        drawCircle(color = Color.Black.copy(alpha = 0.5f * fade), radius = radius + 2f * k, center = Offset(pos.x + 1f * k, pos.y + 1f * k))
                                         val impactColor = when {
                                             imp.isFlyer -> Color(0xFF6B7280) // Flyer grisé
                                             imp.isInnerTen -> Color(0xFF10B981) // Mouche verte
@@ -2248,15 +2114,20 @@ fun ShootRApp(
                                             isBeingDragged -> Color(0xFFFF3B30)
                                             else -> Color(0xFFDC2626)
                                         }
-                                        drawCircle(color = impactColor, radius = radius, center = pos)
-                                        drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = if (isBeingDragged) 2.8f else if (isLatest) 3.5f else 2f))
-                                        if (isLatest && !isBeingDragged) {
+                                        drawCircle(color = impactColor.copy(alpha = fade), radius = radius, center = pos)
+                                        drawCircle(
+                                            color = Color.White.copy(alpha = fade),
+                                            radius = radius,
+                                            center = pos,
+                                            style = Stroke(width = (if (isBeingDragged) 2.8f else if (isLatest) 3.5f else 2f) * k)
+                                        )
+                                        if (isLatest && !isBeingDragged && editing == null) {
                                             // Halo blanc qui pulse : signale le dernier coup posé.
                                             drawCircle(
                                                 color = Color.White.copy(alpha = 0.6f * (1f - haloPulse)),
-                                                radius = radius + 6f + 8f * haloPulse,
+                                                radius = radius + (6f + 8f * haloPulse) * k,
                                                 center = pos,
-                                                style = Stroke(width = 2.5f)
+                                                style = Stroke(width = 2.5f * k)
                                             )
                                         }
                                         if (isLatest && latestPulse.value < 1f) {
@@ -2264,54 +2135,61 @@ fun ShootRApp(
                                             val p = latestPulse.value
                                             drawCircle(
                                                 color = Color.White.copy(alpha = (1f - p) * 0.9f),
-                                                radius = radius + 4f + p * 26f,
+                                                radius = radius + (4f + p * 26f) * k,
                                                 center = pos,
-                                                style = Stroke(width = 3f)
+                                                style = Stroke(width = 3f * k)
                                             )
                                         }
-                                        if (imp.isAuto) {
+                                        if (imp.isAuto && editing == null) {
                                             // Detected automatically, not confirmed yet
-                                            drawCircle(color = Color(0xFF38BDF8), radius = radius + 5f, center = pos, style = Stroke(width = 2f, pathEffect = autoImpactDash))
+                                            drawCircle(color = Color(0xFF38BDF8), radius = radius + 5f * k, center = pos, style = Stroke(width = 2f * k, pathEffect = autoImpactDash))
                                         }
 
+                                        // Text keeps its size on screen whatever the zoom.
                                         val numLayout = textMeasurer.measure(
                                             imp.index.toString(),
                                             style = impactNumberStyle
                                         )
-                                        drawText(
-                                            textLayoutResult = numLayout,
-                                            topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
-                                        )
-
-                                        // Score écrit sous le cercle, sur une petite pastille sombre.
-                                        val scoreText = when {
-                                            imp.isFlyer -> "F"
-                                            imp.isInnerTen -> "10X"
-                                            else -> imp.score.toString()
+                                        withTransform({ scale(1f / scale, 1f / scale, pivot = pos) }) {
+                                            drawText(
+                                                textLayoutResult = numLayout,
+                                                topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
+                                            )
                                         }
-                                        val scoreLayout = textMeasurer.measure(scoreText, style = scoreLabelStyle)
-                                        val labelWidth = scoreLayout.size.width + 8f
-                                        val labelHeight = scoreLayout.size.height + 2f
-                                        val labelTop = pos.y + radius + 4f
-                                        drawRoundRect(
-                                            color = Color(0xDD0F141C),
-                                            topLeft = Offset(pos.x - labelWidth / 2f, labelTop),
-                                            size = Size(labelWidth, labelHeight),
-                                            cornerRadius = CornerRadius(6f)
-                                        )
-                                        drawText(
-                                            textLayoutResult = scoreLayout,
-                                            topLeft = Offset(pos.x - scoreLayout.size.width / 2f, labelTop + 1f)
-                                        )
+
+                                        // Score écrit sous le cercle, sur une petite pastille sombre (cibles notées).
+                                        if ((scoringEnabled || imp.isFlyer) && editing == null) {
+                                            val scoreText = when {
+                                                imp.isFlyer -> "F"
+                                                imp.isInnerTen -> "10X"
+                                                else -> imp.score.toString()
+                                            }
+                                            val scoreLayout = textMeasurer.measure(scoreText, style = scoreLabelStyle)
+                                            val labelWidth = scoreLayout.size.width + 8f
+                                            val labelHeight = scoreLayout.size.height + 2f
+                                            val labelAnchor = Offset(pos.x, pos.y + radius + 4f * k)
+                                            withTransform({ scale(1f / scale, 1f / scale, pivot = labelAnchor) }) {
+                                                drawRoundRect(
+                                                    color = Color(0xDD0F141C),
+                                                    topLeft = Offset(labelAnchor.x - labelWidth / 2f, labelAnchor.y),
+                                                    size = Size(labelWidth, labelHeight),
+                                                    cornerRadius = CornerRadius(6f)
+                                                )
+                                                drawText(
+                                                    textLayoutResult = scoreLayout,
+                                                    topLeft = Offset(labelAnchor.x - scoreLayout.size.width / 2f, labelAnchor.y + 1f)
+                                                )
+                                            }
+                                        }
                                     }
 
                                     // Dessin du nouvel impact en cours d'ajustement dynamique au doigt
                                     pendingImpactOffset?.let { pos ->
                                         val newIdx = impactsList.size + 1
-                                        val arm = 24f
-                                        drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f, center = pos)
-                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - arm, pos.y), end = Offset(pos.x + arm, pos.y), strokeWidth = 2f)
-                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - arm), end = Offset(pos.x, pos.y + arm), strokeWidth = 2f)
+                                        val pendingArm = 24f * k
+                                        drawCircle(color = Color(0xFFFF3B30).copy(alpha = 0.35f), radius = radius + 9f * k, center = pos)
+                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x - pendingArm, pos.y), end = Offset(pos.x + pendingArm, pos.y), strokeWidth = 2f * k)
+                                        drawLine(color = Color(0xFFFF3B30), start = Offset(pos.x, pos.y - pendingArm), end = Offset(pos.x, pos.y + pendingArm), strokeWidth = 2f * k)
 
                                         val (sc, inner) = pendingImpactScore ?: Pair(10, false)
                                         val impactColor = when {
@@ -2320,16 +2198,18 @@ fun ShootRApp(
                                             else -> Color(0xFFFF3B30)
                                         }
                                         drawCircle(color = impactColor, radius = radius, center = pos)
-                                        drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = 2.8f))
+                                        drawCircle(color = Color.White, radius = radius, center = pos, style = Stroke(width = 2.8f * k))
 
                                         val numLayout = textMeasurer.measure(
                                             newIdx.toString(),
                                             style = impactNumberStyle
                                         )
-                                        drawText(
-                                            textLayoutResult = numLayout,
-                                            topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
-                                        )
+                                        withTransform({ scale(1f / scale, 1f / scale, pivot = pos) }) {
+                                            drawText(
+                                                textLayoutResult = numLayout,
+                                                topLeft = Offset(pos.x - numLayout.size.width / 2f, pos.y - numLayout.size.height / 2f)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -2361,7 +2241,9 @@ fun ShootRApp(
                                                 else "📏 Glissez le doigt pour ajuster le diamètre • 2 doigts pour défiler/zoomer"
                                             }
                                             AnnotationMode.TARGET_CENTER -> "🎯 Glissez le doigt pour ajuster le centre • 2 doigts pour défiler/zoomer"
-                                            AnnotationMode.IMPACT -> "🔴 Touchez ou glissez le doigt pour placer / ajuster les impacts • 2 doigts pour défiler/zoomer"
+                                            AnnotationMode.IMPACT ->
+                                                if (selectedImpactIndex != null) "🔴 Touchez le trou ou faites glisser l'impact • 2 doigts pour défiler/zoomer"
+                                                else "🔴 Touchez ou glissez le doigt pour placer / ajuster les impacts • 2 doigts pour défiler/zoomer"
                                         }
                                         Text(
                                             text = modeText,
@@ -2411,6 +2293,27 @@ fun ShootRApp(
                             )
                         }
                         if (shootingStep == 3) {
+                        val editedIndex = selectedImpactIndex
+                        if (editedIndex != null && editedIndex in impactsList.indices) {
+                            // Correction of one impact on the zoomed target, the photo stays visible above.
+                            LaunchedEffect(editedIndex) { shootingScroll.animateScrollTo(canvasTopInColumnPx.toInt()) }
+                            ImpactEditPanel(
+                                shot = impactsList[editedIndex],
+                                scored = scoringEnabled,
+                                onNudge = { dxMm, dyMm ->
+                                    val pxMm = if (pixelPerMm > 0f) pixelPerMm else FALLBACK_PX_PER_MM
+                                    val current = impactsList[editedIndex].canvasOffset
+                                    moveImpact(editedIndex, Offset(current.x + dxMm * pxMm, current.y - dyMm * pxMm))
+                                },
+                                onFlyerChange = { flyer -> impactsList[editedIndex] = impactsList[editedIndex].copy(isFlyer = flyer, isAuto = false) },
+                                onDelete = {
+                                    endImpactEdit(keep = true)
+                                    deleteImpact(editedIndex)
+                                },
+                                onCancel = { endImpactEdit(keep = false) },
+                                onDone = { endImpactEdit(keep = true) }
+                            )
+                        } else {
                         // 5. TABLEAU D'AJUSTEMENT RÉTROACTIF DES IMPACTS (A POSTERIORI)
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -2423,7 +2326,7 @@ fun ShootRApp(
                                     OutlinedButton(
                                         onClick = { detectImpactsOnPhoto() },
                                         enabled = !isDetectingImpacts,
-                                        modifier = Modifier.fillMaxWidth().height(44.dp).testTag("detect_impacts_button"),
+                                        modifier = Modifier.fillMaxWidth().height(ActionHeight).testTag("detect_impacts_button"),
                                         shape = RoundedCornerShape(10.dp)
                                     ) {
                                         if (isDetectingImpacts) {
@@ -2434,7 +2337,7 @@ fun ShootRApp(
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
                                             text = if (isDetectingImpacts) "Détection…" else "Détecter impacts",
-                                            fontSize = 12.sp,
+                                            fontSize = 14.sp,
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                     }
@@ -2452,7 +2355,7 @@ fun ShootRApp(
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            text = "Touchez un coup pour ajuster ses points ou son cordon",
+                                            text = "Touchez un coup pour le corriger sur la cible",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -2539,53 +2442,13 @@ fun ShootRApp(
                                         color = MaterialTheme.colorScheme.outline
                                     )
                                 } else {
-                                    LazyRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        items(impactsList) { imp ->
-                                            Surface(
-                                                shape = RoundedCornerShape(10.dp),
-                                                color = when {
-                                                    imp.isFlyer -> MaterialTheme.colorScheme.surface
-                                                    imp.isInnerTen -> Color(0xFF10B981).copy(alpha = 0.2f)
-                                                    imp.score >= 9 -> Color(0xFFFBBF24).copy(alpha = 0.2f)
-                                                    else -> MaterialTheme.colorScheme.surface
-                                                },
-                                                border = androidx.compose.foundation.BorderStroke(
-                                                    1.dp,
-                                                    if (imp.isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.outlineVariant
-                                                ),
-                                                modifier = Modifier
-                                                    .clickable {
-                                                        impactUnderEdit = imp
-                                                        showImpactEditDialog = true
-                                                    }
-                                                    .testTag("shot_chip_${imp.index}")
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                                        Text("#${imp.index}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                        Text(
-                                                            text = if (!scoringEnabled) "—" else if (imp.isInnerTen) "10X" else "${imp.score}",
-                                                            fontWeight = FontWeight.Black,
-                                                            fontSize = 14.sp,
-                                                            color = if (imp.isInnerTen) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurface
-                                                        )
-                                                    }
-                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                    Icon(imageVector = Icons.Default.Edit, contentDescription = "Ajuster", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-                                                }
-                                            }
-                                        }
-                                    }
+                                    ShotTable(shots = impactsList, scored = scoringEnabled, onSelect = { selectImpact(it.index - 1) })
                                 }
                             }
                         }
 
                         StepNav(onPrevious = { shootingStep = 2 }, onNext = { shootingStep = 4 })
+                        }
                         }
                         if (shootingStep == 4) {
                         // 6. PANNEAU DE TÉLÉMÉTRIE BALISTIQUE
@@ -2710,8 +2573,8 @@ fun ShootRApp(
                             }
 
                             Row {
-                                IconButton(onClick = { showChartDialog = true }) {
-                                    Icon(imageVector = Icons.Default.AutoGraph, contentDescription = "Graphique MOA", tint = MaterialTheme.colorScheme.secondary)
+                                IconButton(onClick = { currentTab = AppTab.ANALYSIS }) {
+                                    Icon(imageVector = Icons.Default.AutoGraph, contentDescription = "Analyses", tint = MaterialTheme.colorScheme.secondary)
                                 }
                                 IconButton(onClick = { showClearHistoryDialog = true }) {
                                     Icon(imageVector = Icons.Default.Delete, contentDescription = "Vider l'historique", tint = MaterialTheme.colorScheme.error)
@@ -2904,113 +2767,199 @@ fun ShootRApp(
                     }
                 }
 
+                AppTab.HOME -> {
+                    val last = savedSessionsList.firstOrNull()
+                    HomeScreen(
+                        summary = HomeSummary(
+                            sessionsCount = savedSessionsList.size,
+                            lastTitle = last?.optString("title", "Séance"),
+                            lastDate = last?.optString("date", ""),
+                            // Targets without a scoring table save no points.
+                            lastScore = last?.takeIf { it.has("totalScore") }?.optInt("totalScore", 0),
+                            lastMoa = last?.optDouble("moa", 0.0)?.takeIf { it > 0.0 },
+                            bestMoa = savedSessionsList.map { it.optDouble("moa", 0.0) }.filter { it > 0.0 }.minOrNull()
+                        ),
+                        weaponsCount = weaponsList.size,
+                        ammoCount = ammoList.size,
+                        sessionInProgress = if (!sessionInProgress) null else listOf(
+                            if (editingSessionId != null) "Correction : $sessionTitleInput" else sessionTitleInput,
+                            "étape ${shootingStep + 1}/5",
+                            if (impactsList.isEmpty()) "" else "${impactsList.size} coup${if (impactsList.size > 1) "s" else ""}"
+                        ).filter { it.isNotBlank() }.joinToString(" · "),
+                        onResume = { currentTab = AppTab.SHOOTING_RANGE },
+                        onNewSession = {
+                            if (sessionInProgress) {
+                                showNewSessionConfirm = true
+                            } else {
+                                startNewSession()
+                                currentTab = AppTab.SHOOTING_RANGE
+                            }
+                        },
+                        onHistory = { currentTab = AppTab.HISTORY },
+                        onArmory = { currentTab = AppTab.ARMORY },
+                        onAnalysis = { currentTab = AppTab.ANALYSIS },
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+
                 AppTab.ARMORY -> {
-                    // Coffre d'armes (Accessible via navigation)
+                    ArmoryScreen(
+                        weapons = weaponsList,
+                        ammo = ammoList,
+                        onAddWeapon = { showAddWeaponDialog = true },
+                        onDeleteWeapon = { weaponPendingDeletion = it },
+                        onAddAmmo = { showAddAmmoDialog = true },
+                        onDeleteAmmo = { removed ->
+                            val before = ammoList.toList()
+                            ammoList.remove(removed)
+                            LocalJsonStore.saveAmmo(context, ammoList.toList())
+                            coroutineScope.launch {
+                                val result = snackbarHostState.showSnackbar(
+                                    message = "Munition retirée",
+                                    actionLabel = "Annuler",
+                                    duration = SnackbarDuration.Long
+                                )
+                                if (result == SnackbarResult.ActionPerformed) {
+                                    ammoList.clear()
+                                    ammoList.addAll(before)
+                                    LocalJsonStore.saveAmmo(context, before)
+                                }
+                            }
+                        },
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+
+                AppTab.ANALYSIS -> {
+                    val chartDataList = remember(savedSessionsList) {
+                        savedSessionsList.map { obj ->
+                            SessionChartData(
+                                id = obj.optLong("id", 0L),
+                                date = obj.optString("date", ""),
+                                weapon = obj.optString("weapon", "Arme"),
+                                caliber = obj.optString("caliber", ""),
+                                ammo = obj.optString("ammo", ""),
+                                distanceMeters = obj.optDouble("distanceMeters", 25.0).toFloat(),
+                                moa = obj.optDouble("moa", 0.0).toFloat(),
+                                esMm = obj.optDouble("esMm", 0.0).toFloat(),
+                                shotsCount = obj.optInt("shotsCount", 0)
+                            )
+                        }
+                    }
+                    AnalysisScreen(sessions = chartDataList, modifier = Modifier.padding(innerPadding))
                 }
             }
         }
     }
 
-    // DIALOG: Armory Dialog
+    // DIALOG: choose a weapon of the rack for the session
     if (showWeaponsDialog) {
-        AlertDialog(
-            onDismissRequest = { showWeaponsDialog = false },
-            containerColor = MaterialTheme.colorScheme.surface,
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Bibliothèque d'armes", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    }
-                    IconButton(onClick = { showAddWeaponDialog = true }) {
-                        Icon(imageVector = Icons.Default.Add, contentDescription = "Ajouter arme", tint = MaterialTheme.colorScheme.secondary)
-                    }
-                }
+        LibraryPickerDialog(
+            title = "Mes armes",
+            emptyText = "Aucune arme dans le râtelier.",
+            items = weaponsList.map { w -> Triple(w, w.name, listOf(w.type, w.caliber)) },
+            onPick = { w ->
+                weaponNameInput = w.name
+                weaponCaliberInput = w.caliber
+                showWeaponsDialog = false
+                Toast.makeText(context, "Arme sélectionnée : ${w.name}", Toast.LENGTH_SHORT).show()
             },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth().height(360.dp)) {
-                    Text(
-                        text = "Sélectionnez une arme pour pré-remplir la séance ou gérez votre coffre :",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    if (weaponsList.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Aucune arme enregistrée.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(weaponsList) { weapon ->
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            weaponNameInput = weapon.name
-                                            weaponCaliberInput = weapon.caliber
-                                            showWeaponsDialog = false
-                                            Toast.makeText(context, "Arme sélectionnée : ${weapon.name}", Toast.LENGTH_SHORT).show()
-                                        },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(weapon.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                                            Spacer(modifier = Modifier.height(2.dp))
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = MaterialTheme.colorScheme.primaryContainer
-                                                ) {
-                                                    Text(
-                                                        weapon.type,
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    )
-                                                }
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = MaterialTheme.colorScheme.surface
-                                                ) {
-                                                    Text(
-                                                        weapon.caliber,
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.secondary,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
+            onAdd = { showAddWeaponDialog = true },
+            onDismiss = { showWeaponsDialog = false }
+        )
+    }
 
-                                        IconButton(
-                                            onClick = { weaponPendingDeletion = weapon }
-                                        ) {
-                                            Icon(imageVector = Icons.Default.Delete, contentDescription = "Supprimer l'arme", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                                        }
-                                    }
-                                }
-                            }
+    // DIALOG: choose ammunition of the rack, those of the session's caliber first
+    if (showAmmoPicker) {
+        val sorted = ammoList.sortedByDescending { it.caliber.isNotBlank() && it.caliber.equals(weaponCaliberInput.trim(), ignoreCase = true) }
+        LibraryPickerDialog(
+            title = "Mes munitions",
+            emptyText = "Aucune munition dans le râtelier.",
+            items = sorted.map { a -> Triple(a, a.name, listOf(a.caliber)) },
+            onPick = { a ->
+                ammoInput = a.name
+                if (weaponCaliberInput.isBlank()) weaponCaliberInput = a.caliber
+                showAmmoPicker = false
+            },
+            onAdd = { showAddAmmoDialog = true },
+            onDismiss = { showAmmoPicker = false }
+        )
+    }
+
+    // DIALOG: Ajouter une munition
+    if (showAddAmmoDialog) {
+        var newName by remember { mutableStateOf("") }
+        var newCaliber by remember { mutableStateOf(weaponCaliberInput) }
+        var newNotes by remember { mutableStateOf("") }
+        val caliberSuggestions = listOf(".22 LR", "9x19 mm", "4.5 mm", ".308 Win", "5.56x45 mm / .223 Rem", ".38 Special")
+        AlertDialog(
+            onDismissRequest = { showAddAmmoDialog = false },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            title = { Text("Ajouter une munition", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Marque / modèle (ex : SK Rifle Match 40gr)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("ammo_name_field")
+                    )
+                    OutlinedTextField(
+                        value = newCaliber,
+                        onValueChange = { newCaliber = it },
+                        label = { Text("Calibre") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(caliberSuggestions) { cal ->
+                            FilterChip(selected = newCaliber == cal, onClick = { newCaliber = cal }, label = { Text(cal, fontSize = 12.sp) })
                         }
                     }
+                    OutlinedTextField(
+                        value = newNotes,
+                        onValueChange = { newNotes = it },
+                        label = { Text("Notes (facultatif)") },
+                        placeholder = { Text("Ex : subsonique, lot n°…") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             },
             confirmButton = {
-                Button(onClick = { showWeaponsDialog = false }) {
-                    Text("Fermer")
-                }
+                Button(onClick = {
+                    if (newName.isNotBlank()) {
+                        ammoList.add(Ammo(System.currentTimeMillis(), newName.trim(), newCaliber.trim(), newNotes.trim()))
+                        LocalJsonStore.saveAmmo(context, ammoList.toList())
+                        showAddAmmoDialog = false
+                    } else {
+                        Toast.makeText(context, "Veuillez entrer un nom de munition.", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Ajouter") }
+            },
+            dismissButton = { TextButton(onClick = { showAddAmmoDialog = false }) { Text("Annuler") } }
+        )
+    }
+
+    // DIALOG: abandon the session in progress for a new one
+    if (showNewSessionConfirm) {
+        AlertDialog(
+            onDismissRequest = { showNewSessionConfirm = false },
+            title = { Text("Séance en cours", fontWeight = FontWeight.Bold) },
+            text = { Text("Une séance n'est pas enregistrée. La reprendre, ou l'abandonner pour en commencer une nouvelle ?") },
+            confirmButton = {
+                Button(onClick = {
+                    showNewSessionConfirm = false
+                    currentTab = AppTab.SHOOTING_RANGE
+                }) { Text("Reprendre") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showNewSessionConfirm = false
+                    startNewSession()
+                    currentTab = AppTab.SHOOTING_RANGE
+                }) { Text("Nouvelle séance", color = MaterialTheme.colorScheme.error) }
             }
         )
     }
@@ -3232,15 +3181,15 @@ private fun StepNav(onPrevious: (() -> Unit)?, onNext: (() -> Unit)?, nextLabel:
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (onPrevious != null) {
-            OutlinedButton(onClick = onPrevious, modifier = Modifier.height(48.dp), shape = RoundedCornerShape(10.dp)) {
-                Text("Précédent", fontSize = 14.sp)
+            OutlinedButton(onClick = onPrevious, modifier = Modifier.height(ActionHeight).testTag("step_previous_button"), shape = RoundedCornerShape(10.dp)) {
+                Text("Précédent", fontSize = 15.sp)
             }
         } else {
             Spacer(modifier = Modifier.width(1.dp))
         }
         if (onNext != null) {
-            Button(onClick = onNext, modifier = Modifier.height(48.dp), shape = RoundedCornerShape(10.dp)) {
-                Text(nextLabel, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Button(onClick = onNext, modifier = Modifier.height(ActionHeight).testTag("step_next_button"), shape = RoundedCornerShape(10.dp)) {
+                Text(nextLabel, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
