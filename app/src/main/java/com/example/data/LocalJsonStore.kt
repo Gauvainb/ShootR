@@ -29,7 +29,7 @@ object LocalJsonStore {
     private val diskDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val writeScope = CoroutineScope(SupervisorJob() + diskDispatcher)
 
-    /** Saved sessions, newest first. Seeds sample sessions on first launch. */
+    /** Saved sessions, newest first. Empty until the user saves one: no sample data is ever added. */
     suspend fun loadSessions(context: Context): List<JSONObject> {
         val filesDir = context.applicationContext.filesDir
         return withContext(diskDispatcher) {
@@ -39,7 +39,7 @@ object LocalJsonStore {
                     val array = JSONArray(file.readText())
                     List(array.length()) { array.getJSONObject(it) }
                 } else {
-                    sampleSessions().also { writeAtomically(file, toJson(it)) }
+                    emptyList()
                 }
                 sessions.sortedByDescending { it.optLong("id", 0L) }
             } catch (_: Exception) {
@@ -190,57 +190,4 @@ object LocalJsonStore {
         Weapon(4L, "Tikka T3x TAC A1", "Fusil de précision", ".308 Win", "Lunette Schmidt & Bender 5-25x56"),
         Weapon(5L, "Smith & Wesson 686", "Revolver", ".357 Magnum", "Hausse réglable")
     )
-
-    private fun sampleSessions(): List<JSONObject> {
-        val now = System.currentTimeMillis()
-        val dateFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRANCE)
-        val samples = listOf(
-            Triple(now - 86400000L * 4, 1.45f, 21.1f),
-            Triple(now - 86400000L * 3, 1.20f, 17.5f),
-            Triple(now - 86400000L * 2, 0.95f, 13.8f),
-            Triple(now - 86400000L * 1, 0.82f, 11.9f)
-        )
-        val offsets = listOf(
-            Pair(5.0, 4.0),
-            Pair(-4.0, 6.0),
-            Pair(2.0, -3.0),
-            Pair(8.0, 10.0),
-            Pair(-6.0, -5.0)
-        )
-        return samples.map { (time, moaVal, esVal) ->
-            val obj = JSONObject()
-            obj.put("id", time)
-            obj.put("title", "Entraînement Précision 50m")
-            obj.put("date", dateFormat.format(Date(time)))
-            obj.put("weapon", "CZ 457 Varmint")
-            obj.put("caliber", ".22 LR")
-            obj.put("targetType", "C50 (25m/50m)")
-            obj.put("distanceMeters", 50.0)
-            obj.put("ammo", "SK Rifle Match 40gr")
-            obj.put("notes", "Bon groupement serré, météo calme.")
-            obj.put("shotsCount", 5)
-            obj.put("totalScore", 48)
-            obj.put("innerTens", 2)
-            obj.put("esMm", esVal.toDouble())
-            obj.put("hMm", (esVal * 0.8).toDouble())
-            obj.put("lMm", (esVal * 0.7).toDouble())
-            obj.put("hPlusL", (esVal * 1.5).toDouble())
-            obj.put("moa", moaVal.toDouble())
-            obj.put("mpiDeltaXMm", 1.2)
-            obj.put("mpiDeltaYMm", -0.8)
-
-            val imps = JSONArray()
-            offsets.forEachIndexed { i, (x, y) ->
-                val impObj = JSONObject()
-                impObj.put("index", i + 1)
-                impObj.put("xMm", x)
-                impObj.put("yMm", y)
-                impObj.put("score", if (i < 3) 10 else 9)
-                impObj.put("isInnerTen", i == 0 || i == 2)
-                imps.put(impObj)
-            }
-            obj.put("impacts", imps)
-            obj
-        }
-    }
 }

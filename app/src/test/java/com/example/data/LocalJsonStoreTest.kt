@@ -27,20 +27,21 @@ class LocalJsonStoreTest {
     private fun ids(sessions: List<JSONObject>) = sessions.map { it.getLong("id") }
 
     @Test
-    fun `sessions are seeded once and always listed newest first`() = runBlocking {
-        val seeded = LocalJsonStore.loadSessions(context)
-        assertEquals(4, seeded.size)
-        assertEquals(ids(seeded).sortedDescending(), ids(seeded))
+    fun `a first launch has no session and adds none by itself`() = runBlocking {
+        repeat(2) { assertTrue(LocalJsonStore.loadSessions(context).isEmpty()) }
+        assertFalse(File(context.filesDir, "sessions_history.json").exists())
+    }
 
-        val newest = JSONObject().put("id", ids(seeded).first() + 1).put("title", "Nouvelle")
-        LocalJsonStore.saveSessions(context, listOf(newest) + seeded)
+    @Test
+    fun `sessions are listed newest first and stay the same across reloads`() = runBlocking {
+        val older = JSONObject().put("id", 100L).put("title", "Ancienne")
+        val newest = JSONObject().put("id", 200L).put("title", "Nouvelle")
+        LocalJsonStore.saveSessions(context, listOf(older, newest))
 
         // Order must be stable across reloads (it used to flip on every load).
         repeat(2) {
             val reloaded = LocalJsonStore.loadSessions(context)
-            assertEquals(5, reloaded.size)
-            assertEquals("Nouvelle", reloaded.first().getString("title"))
-            assertEquals(ids(reloaded).sortedDescending(), ids(reloaded))
+            assertEquals(listOf("Nouvelle", "Ancienne"), reloaded.map { it.getString("title") })
         }
     }
 
