@@ -285,6 +285,7 @@ fun ShootRApp(
     val groupCircleDash = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f) }
     val autoImpactDash = remember { PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f) }
 
+    var shootingStep by remember { mutableIntStateOf(0) }
     var currentTab by remember { mutableStateOf(AppTab.SHOOTING_RANGE) }
 
     var targetTypeInput by remember { mutableStateOf("C50 (25m/50m)") }
@@ -1458,9 +1459,12 @@ fun ShootRApp(
                             weaponReady = weaponNameInput.isNotBlank(),
                             targetReady = selectedImageUri != null,
                             calibrated = pixelPerMm > 0f,
-                            impactsReady = impactsList.isNotEmpty()
+                            impactsReady = impactsList.isNotEmpty(),
+                            currentStep = shootingStep,
+                            onStepClick = { shootingStep = it }
                         )
 
+                        if (shootingStep == 0) {
                         // 1 · Arme et séance
                         Card(
                             modifier = Modifier.fillMaxWidth().testTag("session_characterization_card"),
@@ -1543,6 +1547,9 @@ fun ShootRApp(
                             }
                         }
 
+                        StepNav(onPrevious = null, onNext = { shootingStep = 1 })
+                        }
+                        if (shootingStep == 1) {
                         // 2 · Cible : type de cible puis photo
                         Card(
                             modifier = Modifier.fillMaxWidth().testTag("target_card"),
@@ -1645,6 +1652,9 @@ fun ShootRApp(
                             }
                         }
 
+                        StepNav(onPrevious = { shootingStep = 0 }, onNext = { shootingStep = 2 })
+                        }
+                        if (shootingStep == 2) {
                         // Étape 3 : le calibrage ne s'affiche qu'une fois une photo chargée.
                         if (selectedImageUri != null) {
                         // 3 · Calibrage : modes de pointage
@@ -1738,6 +1748,8 @@ fun ShootRApp(
                             }
                         }
 
+                        }
+                        if (shootingStep == 2 || shootingStep == 3) {
                         // 4. CANEVAS AVEC PHOTO ET OVERLAYS
                         BoxWithConstraints(
                             modifier = Modifier
@@ -2324,6 +2336,11 @@ fun ShootRApp(
                             }
                         }
 
+                        }
+                        if (shootingStep == 2) {
+                            StepNav(onPrevious = { shootingStep = 1 }, onNext = { shootingStep = 3 })
+                        }
+                        if (shootingStep == 3) {
                         // 5. TABLEAU D'AJUSTEMENT RÉTROACTIF DES IMPACTS (A POSTERIORI)
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -2498,6 +2515,9 @@ fun ShootRApp(
                             }
                         }
 
+                        StepNav(onPrevious = { shootingStep = 2 }, onNext = { shootingStep = 4 })
+                        }
+                        if (shootingStep == 4) {
                         // 6. PANNEAU DE TÉLÉMÉTRIE BALISTIQUE
                         Card(
                             modifier = Modifier.fillMaxWidth().testTag("live_metrics_panel"),
@@ -2586,6 +2606,8 @@ fun ShootRApp(
                             )
                         }
 
+                        StepNav(onPrevious = { shootingStep = 3 }, onNext = null)
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
@@ -3072,7 +3094,9 @@ private fun ShootingStepper(
     weaponReady: Boolean,
     targetReady: Boolean,
     calibrated: Boolean,
-    impactsReady: Boolean
+    impactsReady: Boolean,
+    currentStep: Int,
+    onStepClick: (Int) -> Unit
 ) {
     val steps = listOf(
         "Arme" to weaponReady,
@@ -3086,7 +3110,9 @@ private fun ShootingStepper(
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         steps.forEachIndexed { index, (label, done) ->
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onStepClick(index) },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Box(
@@ -3117,6 +3143,34 @@ private fun ShootingStepper(
                     maxLines = 1,
                     softWrap = false
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Pied d'un écran du parcours : « Précédent » et « Suivant », chacun absent quand il n'y a pas
+ * d'écran voisin. Les boutons ont 48 dp de haut, zone tactile recommandée.
+ */
+@Composable
+private fun StepNav(onPrevious: (() -> Unit)?, onNext: (() -> Unit)?) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (onPrevious != null) {
+            OutlinedButton(onClick = onPrevious, modifier = Modifier.height(48.dp), shape = RoundedCornerShape(10.dp)) {
+                Text("Précédent", fontSize = 14.sp)
+            }
+        } else {
+            Spacer(modifier = Modifier.width(1.dp))
+        }
+        if (onNext != null) {
+            Button(onClick = onNext, modifier = Modifier.height(48.dp), shape = RoundedCornerShape(10.dp)) {
+                Text("Suivant", fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
