@@ -103,6 +103,7 @@ class LocalJsonStoreTest {
         assertEquals(garbage, copies.single().readText())
     }
 
+    @Test
     fun `weapons round trip`() = runBlocking {
         val defaults = LocalJsonStore.loadWeapons(context)
         assertEquals(5, defaults.size)

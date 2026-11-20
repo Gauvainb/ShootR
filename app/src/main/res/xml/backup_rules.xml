@@ -7,6 +7,7 @@
     <exclude domain="file" path="sessions_history.json" />
     <exclude domain="file" path="weapons_library.json" />
     <exclude domain="file" path="ammo_library.json" />
+    <exclude domain="file" path="session_photos" />
     <exclude domain="file" path="sessions_history.json.tmp" />
     <exclude domain="file" path="weapons_library.json.tmp" />
     <exclude domain="file" path="ammo_library.json.tmp" />
